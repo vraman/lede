@@ -76,8 +76,18 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
         temporals.first().copied()
     };
 
-    // 1. Always: summary_card (pick first numeric)
-    if let Some(num) = numerics.first() {
+    // Pick the best numeric column: prefer revenue, sales, amount, spend, etc.
+    let primary_metric = {
+        let preferred = ["revenue", "sales", "amount", "total", "spend", "price", "income"];
+        numerics
+            .iter()
+            .find(|c| preferred.contains(&c.name.to_lowercase().as_str()))
+            .or(numerics.last()) // fallback to last numeric (often the most "important" column)
+            .copied()
+    };
+
+    // 1. Always: summary_card (pick best numeric)
+    if let Some(num) = primary_metric {
         let agg = default_aggregate(num);
         suggestions.push(ViewSuggestion {
             view_type: ViewType::SummaryCard,
@@ -93,7 +103,7 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
 
     // 2. Strong: line_chart (temporal + numeric)
     if let Some(temp) = temporal {
-        if let Some(num) = numerics.first() {
+        if let Some(num) = primary_metric {
             let agg = default_aggregate(num);
             suggestions.push(ViewSuggestion {
                 view_type: ViewType::LineChart,
@@ -113,7 +123,7 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
         if cat.unique_count > 50 {
             continue;
         }
-        if let Some(num) = numerics.first() {
+        if let Some(num) = primary_metric {
             let agg = default_aggregate(num);
             if cat.unique_count > 20 {
                 // ranked_list instead
@@ -276,8 +286,6 @@ mod tests {
     fn test_survey_suggestions() {
         let metas = classify_file("survey.csv");
         let suggestions = suggest_views(&metas);
-
-        let types: Vec<&ViewType> = suggestions.iter().map(|s| &s.view_type).collect();
 
         // Should have ordered_bar or count_bar for satisfaction
         let has_satisfaction_view = suggestions.iter().any(|s| {
