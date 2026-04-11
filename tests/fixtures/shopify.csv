@@ -1,0 +1,9 @@
+order_id,date,customer_name,product,region,quantity,revenue
+1001,2025-01-05,Alice Smith,Widget Pro,West,2,149.98
+1002,2025-01-07,Bob Jones,Widget Lite,East,1,49.99
+1003,2025-01-12,Carol White,Widget Pro,West,3,224.97
+1004,2025-02-01,Dave Brown,Gadget Plus,Central,1,99.99
+1005,2025-02-14,Eve Davis,Widget Lite,East,2,99.98
+1006,2025-03-03,Frank Miller,Gadget Plus,West,2,199.98
+1007,2025-03-19,Grace Wilson,Widget Pro,Central,1,74.99
+1008,2025-04-02,Hank Moore,Widget Lite,West,4,199.96
