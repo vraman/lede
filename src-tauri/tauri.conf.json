@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "lede",
-        "width": 800,
-        "height": 600
+        "title": "Lede",
+        "width": 1200,
+        "height": 800
       }
     ],
     "security": {
