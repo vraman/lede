@@ -1,0 +1,9 @@
+respondent_id,age,satisfaction,likelihood_to_recommend,nps_score
+R001,28,Strongly Agree,Always,9
+R002,34,Agree,Often,7
+R003,45,Neutral,Sometimes,5
+R004,22,Disagree,Rarely,3
+R005,51,Strongly Agree,Always,10
+R006,38,Agree,Often,8
+R007,29,Strongly Disagree,Never,1
+R008,42,Agree,Often,7
