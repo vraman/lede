@@ -23,16 +23,20 @@ function App() {
     if (!data) return;
     setVisibleViews([]);
     const suggestions = data.suggestions;
-    // Show summary cards first, then others
     const summaryCards = suggestions.filter((s) => s.view_type === "SummaryCard");
     const others = suggestions.filter((s) => s.view_type !== "SummaryCard");
     const ordered = [...summaryCards, ...others];
 
+    const timers: ReturnType<typeof setTimeout>[] = [];
     ordered.forEach((view, i) => {
-      setTimeout(() => {
-        setVisibleViews((prev) => [...prev, view]);
-      }, i * 100);
+      timers.push(
+        setTimeout(() => {
+          setVisibleViews((prev) => [...prev, view]);
+        }, i * 100)
+      );
     });
+
+    return () => timers.forEach(clearTimeout);
   }, [data]);
 
   const handleFilePick = useCallback(async () => {
