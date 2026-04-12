@@ -11,6 +11,7 @@ pub enum ColumnType {
     NumericMeasure,
     NumericRatio,
     NumericSigned,
+    NumericDimension,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +66,10 @@ fn is_date(value: &str) -> bool {
 const SAMPLE_SIZE: usize = 200;
 
 const INDEX_NAMES: &[&str] = &["index", "idx", "row", "row_number", "row_num", "rn", "no", "#"];
+
+const DIMENSION_KEYWORDS: &[&str] = &[
+    "year", "zip", "code", "rating", "score", "rank", "grade", "level", "tier",
+];
 
 fn is_numeric(value: &str) -> bool {
     value.parse::<f64>().is_ok()
@@ -151,9 +156,9 @@ pub fn classify_column(name: &str, values: &[String]) -> ColumnMeta {
 
         let ratio = unique_count as f64 / total_count.max(1) as f64;
 
-        // Low cardinality numeric → Categorical (e.g., year with 7 unique values)
+        // NumericDimension: very low cardinality numeric (group by, never aggregate)
         if ratio < 0.05 {
-            return meta(ColumnType::Categorical);
+            return meta(ColumnType::NumericDimension);
         }
 
         // Numeric Identifier: very high cardinality + name suggests index/id
@@ -163,15 +168,23 @@ pub fn classify_column(name: &str, values: &[String]) -> ColumnMeta {
             }
         }
 
-        // Year detection: integers in [1800, 2100] → Categorical (summing years is meaningless)
+        // NumericDimension: all integers with small range (e.g., years, ratings)
         let non_sentinel_nums: Vec<f64> = nums.iter().filter(|&&n| n != -1.0).copied().collect();
-        if !non_sentinel_nums.is_empty() {
-            let all_years = non_sentinel_nums.iter().all(|&n| {
-                n == n.floor() && (1700.0..=2100.0).contains(&n)
-            });
-            if all_years {
-                return meta(ColumnType::Categorical);
+        if !non_sentinel_nums.is_empty() && ratio < 0.3 {
+            let all_integers = non_sentinel_nums.iter().all(|&n| n == n.floor());
+            if all_integers {
+                let min_val = non_sentinel_nums.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max_val = non_sentinel_nums.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                if (max_val - min_val) < 500.0 {
+                    return meta(ColumnType::NumericDimension);
+                }
             }
+        }
+
+        // NumericDimension: name suggests dimensional use (word-boundary match)
+        let name_parts: Vec<&str> = lower_name.split(|c: char| !c.is_alphanumeric()).filter(|s| !s.is_empty()).collect();
+        if DIMENSION_KEYWORDS.iter().any(|kw| name_parts.contains(kw)) {
+            return meta(ColumnType::NumericDimension);
         }
 
         // Ratio keyword in name and values between 0-1 or 0-100
@@ -277,7 +290,7 @@ mod tests {
         assert_eq!(find_col(&metas, "age").col_type, ColumnType::NumericMeasure);
         assert_eq!(find_col(&metas, "satisfaction").col_type, ColumnType::OrderedCategorical);
         assert_eq!(find_col(&metas, "likelihood_to_recommend").col_type, ColumnType::OrderedCategorical);
-        assert_eq!(find_col(&metas, "nps_score").col_type, ColumnType::NumericMeasure);
+        assert_eq!(find_col(&metas, "nps_score").col_type, ColumnType::NumericDimension);
     }
 
     // --- Edge case tests ---
@@ -310,7 +323,7 @@ mod tests {
         // "name" has 6 non-empty values out of 8 rows, 6/8 = 0.75 unique ratio → Categorical
         assert_eq!(find_col(&metas, "name").col_type, ColumnType::Categorical);
         assert_eq!(find_col(&metas, "age").col_type, ColumnType::NumericMeasure);
-        assert_eq!(find_col(&metas, "score").col_type, ColumnType::NumericMeasure);
+        assert_eq!(find_col(&metas, "score").col_type, ColumnType::NumericDimension);
         assert_eq!(find_col(&metas, "date").col_type, ColumnType::Temporal);
     }
 
@@ -403,5 +416,69 @@ mod tests {
     fn test_timestamp_detected_as_temporal() {
         let metas = classify_realworld("salary_survey.csv");
         assert_eq!(find_col(&metas, "Timestamp").col_type, ColumnType::Temporal);
+    }
+
+    // --- NumericDimension tests ---
+
+    #[test]
+    fn test_founded_is_numeric_dimension() {
+        // Year-like values: all integers, small range, low cardinality in large dataset
+        let values: Vec<String> = (0..200).map(|i| ((1800 + i % 50) as u32).to_string()).collect();
+        let meta = classify_column("Founded", &values);
+        assert_eq!(meta.col_type, ColumnType::NumericDimension);
+    }
+
+    #[test]
+    fn test_zip_code_is_numeric_dimension() {
+        // "zip" keyword triggers NumericDimension regardless of range
+        let values: Vec<String> = vec!["10001", "90210", "60601", "30301", "10001", "90210"]
+            .into_iter().map(String::from).collect();
+        let meta = classify_column("zip_code", &values);
+        assert_eq!(meta.col_type, ColumnType::NumericDimension);
+    }
+
+    #[test]
+    fn test_nps_score_is_numeric_dimension() {
+        // "score" keyword triggers NumericDimension
+        let values: Vec<String> = vec!["9", "7", "5", "3", "10", "8", "1", "7"]
+            .into_iter().map(String::from).collect();
+        let meta = classify_column("nps_score", &values);
+        assert_eq!(meta.col_type, ColumnType::NumericDimension);
+    }
+
+    #[test]
+    fn test_revenue_stays_numeric_measure() {
+        // Float values + no dimension keyword → NumericMeasure
+        let values: Vec<String> = vec!["149.98", "49.99", "224.97", "99.99", "99.98", "199.98"]
+            .into_iter().map(String::from).collect();
+        let meta = classify_column("revenue", &values);
+        assert_eq!(meta.col_type, ColumnType::NumericMeasure);
+    }
+
+    #[test]
+    fn test_year_column_is_numeric_dimension() {
+        // "year" keyword triggers NumericDimension
+        let values: Vec<String> = vec!["2020", "2021", "2022", "2023", "2024", "2020", "2021"]
+            .into_iter().map(String::from).collect();
+        let meta = classify_column("year", &values);
+        assert_eq!(meta.col_type, ColumnType::NumericDimension);
+    }
+
+    #[test]
+    fn test_age_stays_numeric_measure() {
+        // No keyword, not low cardinality → NumericMeasure
+        let values: Vec<String> = vec!["28", "34", "45", "22", "51", "38", "29", "42"]
+            .into_iter().map(String::from).collect();
+        let meta = classify_column("age", &values);
+        assert_eq!(meta.col_type, ColumnType::NumericMeasure);
+    }
+
+    #[test]
+    fn test_quantity_stays_numeric_measure() {
+        // Small integers but no keyword and high ratio → NumericMeasure
+        let values: Vec<String> = vec!["2", "1", "3", "1", "2", "2", "1", "4"]
+            .into_iter().map(String::from).collect();
+        let meta = classify_column("quantity", &values);
+        assert_eq!(meta.col_type, ColumnType::NumericMeasure);
     }
 }
