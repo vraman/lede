@@ -6,7 +6,8 @@ export type ColumnType =
   | "Identifier"
   | "NumericMeasure"
   | "NumericRatio"
-  | "NumericSigned";
+  | "NumericSigned"
+  | "NumericDimension";
 
 export interface ColumnMeta {
   name: string;

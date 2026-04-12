@@ -1,6 +1,8 @@
 use crate::classifier::{classify_column, ColumnMeta};
 use crate::suggester::{suggest_views, ViewSuggestion};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use tauri::Manager;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedCSV {
@@ -66,6 +68,58 @@ pub fn parse_csv(path: String) -> Result<ParsedCSV, String> {
         sample_rows,
         suggestions,
     })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentFile {
+    pub path: String,
+    pub title: String,
+    pub last_opened: String,
+}
+
+fn recent_files_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let data_dir = app.path().app_data_dir().map_err(|e: tauri::Error| e.to_string())?;
+    std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    Ok(data_dir.join("recent_files.json"))
+}
+
+fn load_recent_files(app: &tauri::AppHandle) -> Vec<RecentFile> {
+    let path = match recent_files_path(app) {
+        Ok(p) => p,
+        Err(_) => return vec![],
+    };
+    if !path.exists() {
+        return vec![];
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    serde_json::from_str(&content).unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn get_recent_files(app: tauri::AppHandle) -> Result<Vec<RecentFile>, String> {
+    Ok(load_recent_files(&app))
+}
+
+#[tauri::command]
+pub fn add_recent_file(app: tauri::AppHandle, path: String, title: String) -> Result<(), String> {
+    let file_path = recent_files_path(&app)?;
+    let mut recents = load_recent_files(&app);
+    recents.retain(|r| r.path != path);
+    recents.insert(
+        0,
+        RecentFile {
+            path,
+            title,
+            last_opened: chrono::Local::now().to_rfc3339(),
+        },
+    );
+    recents.truncate(10);
+    let content = serde_json::to_string_pretty(&recents).map_err(|e| e.to_string())?;
+    std::fs::write(&file_path, content).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]
