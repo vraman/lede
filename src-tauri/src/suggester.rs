@@ -48,7 +48,9 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
     let categoricals: Vec<&ColumnMeta> = columns
         .iter()
         .filter(|c| {
-            c.col_type == ColumnType::Categorical || c.col_type == ColumnType::Geographic
+            c.col_type == ColumnType::Categorical
+                || c.col_type == ColumnType::Geographic
+                || c.col_type == ColumnType::NumericDimension
         })
         .collect();
     let ordered_cats: Vec<&ColumnMeta> = columns
