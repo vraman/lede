@@ -94,6 +94,7 @@ export function parseLede(content: string): LedeDocument {
     const block = match[1];
     const view: ViewSuggestion = {
       view_type: "Table" as any,
+      title: "",
       metric: null,
       group_by: null,
       aggregate: "Sum" as any,
@@ -304,6 +305,7 @@ function extractText(node: JSONContent): string {
 function parseDataviewBlock(block: string): ViewSuggestion {
   const view: ViewSuggestion = {
     view_type: "Table" as any,
+    title: "",
     metric: null,
     group_by: null,
     aggregate: "Sum" as any,

@@ -1,6 +1,7 @@
 import { useRef, useEffect } from "react";
 import * as Plot from "@observablehq/plot";
 import { ParsedCSV, ViewSuggestion } from "../types";
+import { useDataContext } from "../DataContext";
 
 interface Props {
   data: ParsedCSV;
@@ -114,6 +115,7 @@ const VIEW_TYPE_LABELS: Record<string, string> = {
 };
 
 export default function ChartView({ data, suggestion, alternatives = [], onSwap, onChangeAggregate }: Props) {
+  const { sourceFilename } = useDataContext();
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -289,25 +291,24 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
     };
   }, [data, suggestion]);
 
-  const aggLabel = suggestion.aggregate.toLowerCase();
   const hasMetricAgg = suggestion.metric && suggestion.group_by
     && suggestion.view_type !== "CountBar"
     && suggestion.view_type !== "OrderedBar"
     && suggestion.view_type !== "Histogram";
 
-  const title =
-    suggestion.view_type === "ScatterPlot"
-      ? `${suggestion.x_col} vs ${suggestion.y_col}`
-      : suggestion.view_type === "CountBar" || suggestion.view_type === "OrderedBar"
-        ? `${suggestion.group_by} (count)`
-        : suggestion.view_type === "Histogram"
-          ? `${suggestion.metric} (distribution)`
-          : `${aggLabel} of ${suggestion.metric} by ${suggestion.group_by || "value"}`;
+  const title = suggestion.title || suggestion.metric || suggestion.group_by || "Chart";
+
+  const subtitle = sourceFilename
+    ? `${sourceFilename} · ${data.row_count.toLocaleString()} rows`
+    : null;
 
   return (
     <div className="view-card chart-view">
       <div className="chart-header">
-        <h3 className="chart-title">{title}</h3>
+        <div className="chart-title-group">
+          <h3 className="chart-title">{title}</h3>
+          {subtitle && <span className="chart-subtitle">{subtitle}</span>}
+        </div>
         <div className="chart-controls">
           {hasMetricAgg && onChangeAggregate && (
             <select

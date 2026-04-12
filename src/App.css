@@ -63,12 +63,13 @@ body {
 }
 
 .home-actions {
+  display: flex;
+  justify-content: center;
   margin-bottom: 2.5rem;
 }
 
 .home-new-btn {
-  width: 100%;
-  padding: 0.75rem 1.5rem;
+  padding: 0.75rem 2rem;
   font-size: 0.95rem;
   font-family: var(--font-sans);
   background: var(--surface);
@@ -185,45 +186,87 @@ body {
   background: var(--surface);
 }
 
-.app-header h1 {
-  font-family: var(--font-serif);
-  font-size: 1.25rem;
+.doc-title {
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: text;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  transition: background 0.1s;
+  border: 1px solid transparent;
+}
+
+.doc-title:hover {
+  background: #f5f5f4;
+}
+
+.doc-title.untitled {
+  color: var(--text-muted);
   font-weight: 400;
+}
+
+.title-input {
+  font-family: var(--font-sans);
+  font-size: 0.95rem;
+  font-weight: 600;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  outline: none;
+  background: var(--surface);
+  color: var(--text);
+  min-width: 200px;
 }
 
 .header-actions {
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  gap: 0.75rem;
 }
 
-.btn-primary,
-.btn-secondary {
-  padding: 0.4rem 1rem;
-  border-radius: var(--radius);
-  font-size: 0.85rem;
+.save-indicator {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  animation: fadeIn 0.2s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.btn-open {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: none;
+  border: none;
   cursor: pointer;
-  border: 1px solid var(--border);
-  transition: all 0.15s;
-  box-shadow: none;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  transition: color 0.15s;
 }
 
-.btn-primary {
-  background: var(--accent);
-  color: white;
-  border-color: var(--accent);
-}
-
-.btn-primary:hover {
-  background: var(--accent-hover);
-}
-
-.btn-secondary {
-  background: var(--surface);
+.btn-open:hover {
   color: var(--text);
 }
 
-.btn-secondary:hover {
-  background: #f5f5f4;
+.btn-save {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--radius);
+  font-family: var(--font-sans);
+  transition: all 0.15s;
+}
+
+.btn-save:hover {
+  color: var(--text);
+  border-color: var(--accent);
 }
 
 /* Editor layout — single Tiptap document */
@@ -268,26 +311,32 @@ body {
   margin-bottom: 1rem;
 }
 
+.chart-title-group {
+  min-width: 0;
+}
+
 .chart-title {
   font-size: 0.85rem;
   font-weight: 500;
-  color: var(--text-muted);
-  margin-bottom: 0.75rem;
+  color: var(--text);
+  margin-bottom: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
 }
 
-.chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.75rem;
+.chart-subtitle {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
 }
 
-.chart-header .chart-title {
-  margin-bottom: 0;
+.chart-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
 }
 
 .chart-controls {
@@ -360,7 +409,7 @@ body {
 /* Dataview nodes inside Tiptap */
 .dataview-wrapper {
   position: relative;
-  margin: 0.5rem 0;
+  margin: 0.25rem 0;
   border-radius: var(--radius);
   transition: box-shadow 0.15s;
 }
@@ -552,7 +601,12 @@ tr:hover td {
 }
 
 .prose-editor .tiptap p {
-  margin-bottom: 0.75em;
+  margin-bottom: 0.5em;
+}
+
+/* Empty paragraphs between views: minimal height */
+.prose-editor .tiptap p.is-empty {
+  margin-bottom: 0.25em;
 }
 
 .prose-editor .tiptap h1 {
@@ -592,4 +646,25 @@ tr:hover td {
   background: #f5f5f4;
   padding: 0.15em 0.3em;
   border-radius: 3px;
+}
+
+/* Placeholder text for empty paragraphs */
+.prose-editor .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--text-muted);
+  opacity: 0.5;
+  pointer-events: none;
+  height: 0;
+  font-style: italic;
+}
+
+.prose-editor .tiptap .is-empty::before {
+  content: attr(data-placeholder);
+  float: left;
+  color: var(--text-muted);
+  opacity: 0.4;
+  pointer-events: none;
+  height: 0;
+  font-style: italic;
 }

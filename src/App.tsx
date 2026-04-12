@@ -48,12 +48,16 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sourcePath, setSourcePath] = useState<string>("");
+  const [docTitle, setDocTitle] = useState<string>("");
   const [editorContent, setEditorContent] = useState<JSONContent>({
     type: "doc",
     content: [{ type: "paragraph" }],
   });
+  const [saveStatus, setSaveStatus] = useState<"" | "saving" | "saved">("");
+  const [savePath, setSavePath] = useState<string>("");
   const editorInstanceRef = useRef<Editor | null>(null);
   const metaRef = useRef<LedeMeta | null>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
 
   const handleFilePick = useCallback(async () => {
     try {
@@ -84,10 +88,12 @@ function App() {
       const result = await invoke<ParsedCSV>("parse_csv", { path });
       setData(result);
       setSourcePath(path);
+      const name = path.split("/").pop()?.replace(".csv", "") || "Untitled";
+      setDocTitle(name);
       setEditorContent(buildInitialDoc(result.suggestions));
       metaRef.current = null;
-      const title = path.split("/").pop()?.replace(".csv", "") || "Untitled";
-      invoke("add_recent_file", { path, title }).catch(() => {});
+      setSavePath("");
+      invoke("add_recent_file", { path, title: name }).catch(() => {});
     } catch (e) {
       setError(String(e));
     } finally {
@@ -100,9 +106,11 @@ function App() {
       const content = await readTextFile(path);
       const { meta, json } = parseToEditorJSON(content);
       metaRef.current = meta;
+      setSavePath(path);
 
       const title =
         meta.title || path.split("/").pop()?.replace(".lede", "") || "Untitled";
+      setDocTitle(title);
       invoke("add_recent_file", { path, title }).catch(() => {});
 
       if (meta.sources.length > 0) {
@@ -133,7 +141,7 @@ function App() {
     }
   };
 
-  const handleSave = useCallback(async () => {
+  const doSave = useCallback(async (targetPath?: string) => {
     if (!data) return;
 
     const editor = editorInstanceRef.current;
@@ -143,44 +151,54 @@ function App() {
       sourcePath.split("/").pop()?.replace(".csv", "") || "untitled";
     const today = new Date().toISOString().split("T")[0];
 
-    const meta: LedeMeta = metaRef.current || {
-      title: filename,
-      created: today,
-      sources: sourcePath
+    const meta: LedeMeta = {
+      title: docTitle || filename,
+      created: metaRef.current?.created || today,
+      sources: metaRef.current?.sources || (sourcePath
         ? [sourcePath.split("/").pop() || sourcePath]
-        : [],
+        : []),
     };
+    metaRef.current = meta;
 
     const fileContent = serializeFromEditor(meta, currentJSON);
+    let finalPath = targetPath || savePath;
 
     try {
-      const savePath = await save({
-        filters: [{ name: "Lede", extensions: ["lede"] }],
-        defaultPath: `${filename}.lede`,
-      });
-      if (savePath) {
-        await writeTextFile(savePath, fileContent);
-        invoke("add_recent_file", {
-          path: savePath,
-          title: meta.title || filename,
-        }).catch(() => {});
+      if (!finalPath) {
+        const picked = await save({
+          filters: [{ name: "Lede", extensions: ["lede"] }],
+          defaultPath: `${filename}.lede`,
+        });
+        if (!picked) return;
+        finalPath = picked;
+        setSavePath(finalPath);
       }
+
+      setSaveStatus("saving");
+      await writeTextFile(finalPath, fileContent);
+      invoke("add_recent_file", {
+        path: finalPath,
+        title: meta.title || filename,
+      }).catch(() => {});
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus(""), 2000);
     } catch (e) {
       setError(String(e));
+      setSaveStatus("");
     }
-  }, [data, sourcePath, editorContent]);
+  }, [data, sourcePath, editorContent, docTitle, savePath]);
 
   // Cmd+S to save
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "s") {
         e.preventDefault();
-        await handleSave();
+        await doSave();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleSave]);
+  }, [doSave]);
 
   // Tauri drag-and-drop
   useEffect(() => {
@@ -232,16 +250,39 @@ function App() {
     );
   }
 
+  const sourceFilename = sourcePath.split("/").pop() || "";
+
   return (
-    <DataContext.Provider value={{ data, suggestions: data.suggestions }}>
+    <DataContext.Provider value={{ data, suggestions: data.suggestions, sourceFilename }}>
       <main className="app workspace">
         <header className="app-header">
-          <h1>Lede</h1>
+          {editingTitle ? (
+            <input
+              className="title-input"
+              value={docTitle}
+              onChange={(e) => setDocTitle(e.target.value)}
+              onBlur={() => setEditingTitle(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") setEditingTitle(false);
+              }}
+              autoFocus
+            />
+          ) : (
+            <h1
+              className={`doc-title ${!docTitle ? "untitled" : ""}`}
+              onClick={() => setEditingTitle(true)}
+            >
+              {docTitle || "Untitled Notebook"}
+            </h1>
+          )}
           <div className="header-actions">
-            <button onClick={handleFilePick} className="btn-secondary">
+            {saveStatus === "saved" && (
+              <span className="save-indicator">Saved</span>
+            )}
+            <button onClick={handleFilePick} className="btn-open">
               Open
             </button>
-            <button onClick={handleSave} className="btn-primary">
+            <button onClick={() => doSave()} className="btn-save">
               Save
             </button>
           </div>
