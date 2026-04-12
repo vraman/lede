@@ -141,3 +141,5 @@ Make all UI decisions independently. Do not ask for approval on visual choices. 
 - Commit after every passing test suite
 - Commit message format: `feat: [what]` / `fix: [what]` / `test: [what]`
 - Never commit with failing tests
+- Commit at the end of every session with message: "feat: session N complete — [one line summary]"
+- Never leave a session with uncommitted work.
