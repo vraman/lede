@@ -148,25 +148,24 @@ body {
   background: #f5f5f4;
 }
 
-/* Layout */
+/* Layout — single column, prose below views */
 .workspace-layout {
-  display: grid;
-  grid-template-columns: 1fr 360px;
-  gap: 0;
+  display: flex;
+  flex-direction: column;
   flex: 1;
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .views-panel {
   padding: 1.5rem;
-  overflow-y: auto;
 }
 
 .prose-panel {
-  border-left: 1px solid var(--border);
+  border-top: 1px solid var(--border);
   padding: 1.5rem;
   background: var(--surface);
-  overflow-y: auto;
-  max-height: calc(100vh - 50px);
 }
 
 /* Summary Cards */
@@ -196,6 +195,9 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-top: 0.25rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* View Cards */
@@ -212,6 +214,52 @@ body {
   font-weight: 500;
   color: var(--text-muted);
   margin-bottom: 0.75rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.chart-header .chart-title {
+  margin-bottom: 0;
+}
+
+.view-switcher {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.view-chip {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 99px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-sans);
+  line-height: 1.4;
+}
+
+.view-chip:hover {
+  background: #f5f5f4;
+  color: var(--text);
+}
+
+.view-chip.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+  font-weight: 600;
+  cursor: default;
 }
 
 .chart-view svg {
@@ -221,8 +269,8 @@ body {
 
 /* Charts Grid */
 .charts-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
   margin-bottom: 1rem;
 }

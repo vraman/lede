@@ -40,6 +40,7 @@ export interface ViewSuggestion {
   limit: number | null;
   x_col: string | null;
   y_col: string | null;
+  shown_by_default: boolean;
 }
 
 export interface ParsedCSV {

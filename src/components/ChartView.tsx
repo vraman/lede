@@ -5,6 +5,8 @@ import { ParsedCSV, ViewSuggestion } from "../types";
 interface Props {
   data: ParsedCSV;
   suggestion: ViewSuggestion;
+  alternatives?: ViewSuggestion[];
+  onSwap?: (alt: ViewSuggestion) => void;
 }
 
 const ORDINAL_ORDERS: Record<string, string[]> = {
@@ -18,13 +20,38 @@ const ORDINAL_ORDERS: Record<string, string[]> = {
   likelihood_to_recommend: ["Never", "Rarely", "Sometimes", "Often", "Always"],
 };
 
+const NUMERIC_TYPES = new Set([
+  "NumericMeasure",
+  "NumericRatio",
+  "NumericSigned",
+]);
+
+function truncLabel(s: string, max = 40): string {
+  return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
+}
+
+/** Try to parse a date string into a Date object. Returns null on failure. */
+function tryParseDate(s: string): Date | null {
+  // Try ISO format first (fast path)
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return d;
+  // Try M/D/YYYY H:M:S format
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (m) return new Date(+m[3], +m[1] - 1, +m[2], +m[4], +m[5], +(m[6] || 0));
+  return null;
+}
+
 function buildRows(data: ParsedCSV): Record<string, string | number>[] {
   return data.sample_rows.map((row) => {
     const obj: Record<string, string | number> = {};
     data.columns.forEach((col, i) => {
       const raw = row[i];
-      const num = parseFloat(raw);
-      obj[col.name] = isNaN(num) ? raw : num;
+      if (NUMERIC_TYPES.has(col.col_type)) {
+        const num = parseFloat(raw);
+        obj[col.name] = isNaN(num) ? raw : num;
+      } else {
+        obj[col.name] = raw;
+      }
     });
     return obj;
   });
@@ -72,7 +99,18 @@ function countByGroup(
   }));
 }
 
-export default function ChartView({ data, suggestion }: Props) {
+const VIEW_TYPE_LABELS: Record<string, string> = {
+  LineChart: "Line",
+  BarChart: "Bar",
+  CountBar: "Count",
+  OrderedBar: "Ordered",
+  ScatterPlot: "Scatter",
+  Histogram: "Histogram",
+  RankedList: "Ranked",
+  Heatmap: "Heatmap",
+};
+
+export default function ChartView({ data, suggestion, alternatives = [], onSwap }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -87,10 +125,12 @@ export default function ChartView({ data, suggestion }: Props) {
           const groupBy = suggestion.group_by!;
           const metric = suggestion.metric!;
           const agg = aggregate(rows, groupBy, metric, suggestion.aggregate);
+          const barHeight = Math.max(200, agg.length * 24);
           chart = Plot.plot({
+            height: barHeight,
             marginLeft: 100,
-            x: { label: metric },
-            y: { label: groupBy },
+            x: { label: truncLabel(metric) },
+            y: { label: truncLabel(groupBy) },
             marks: [
               Plot.barX(agg, {
                 y: groupBy,
@@ -108,14 +148,40 @@ export default function ChartView({ data, suggestion }: Props) {
           const groupBy = suggestion.group_by!;
           const metric = suggestion.metric!;
           const agg = aggregate(rows, groupBy, metric, suggestion.aggregate);
-          chart = Plot.plot({
-            x: { label: groupBy, type: "point" },
-            y: { label: metric },
-            marks: [
-              Plot.lineY(agg, { x: groupBy, y: metric, stroke: "#64748b" }),
-              Plot.dot(agg, { x: groupBy, y: metric, fill: "#64748b" }),
-            ],
-          });
+          // Check if groupBy column is Temporal
+          const groupCol = data.columns.find((c) => c.name === groupBy);
+          const isTemporal = groupCol?.col_type === "Temporal";
+
+          if (isTemporal) {
+            // Parse dates for proper time scale
+            const dateKey = "__date__";
+            const dated = agg
+              .map((row) => ({ ...row, [dateKey]: tryParseDate(String(row[groupBy])) }))
+              .filter((row) => row[dateKey] !== null) as Record<string, any>[];
+            dated.sort((a, b) => (a[dateKey] as Date).getTime() - (b[dateKey] as Date).getTime());
+            chart = Plot.plot({
+              height: 200,
+              x: { label: truncLabel(groupBy), type: "time" },
+              y: { label: truncLabel(metric), zero: true },
+              marks: [
+                Plot.lineY(dated, { x: dateKey, y: metric, stroke: "#64748b" }),
+                Plot.dot(dated, { x: dateKey, y: metric, fill: "#64748b", r: 3 }),
+              ],
+            });
+          } else {
+            agg.sort((a, b) =>
+              String(a[groupBy]).localeCompare(String(b[groupBy]))
+            );
+            chart = Plot.plot({
+              height: 200,
+              x: { label: truncLabel(groupBy), type: "point" },
+              y: { label: truncLabel(metric), zero: true },
+              marks: [
+                Plot.lineY(agg, { x: groupBy, y: metric, stroke: "#64748b" }),
+                Plot.dot(agg, { x: groupBy, y: metric, fill: "#64748b", r: 3 }),
+              ],
+            });
+          }
           break;
         }
 
@@ -123,8 +189,9 @@ export default function ChartView({ data, suggestion }: Props) {
           const xCol = suggestion.x_col!;
           const yCol = suggestion.y_col!;
           chart = Plot.plot({
-            x: { label: xCol },
-            y: { label: yCol },
+            height: 200,
+            x: { label: truncLabel(xCol) },
+            y: { label: truncLabel(yCol) },
             marks: [
               Plot.dot(rows, {
                 x: xCol,
@@ -140,7 +207,8 @@ export default function ChartView({ data, suggestion }: Props) {
         case "Histogram": {
           const metric = suggestion.metric!;
           chart = Plot.plot({
-            x: { label: metric },
+            height: 200,
+            x: { label: truncLabel(metric) },
             marks: [
               Plot.rectY(rows, { ...Plot.binX({ y: "count" }, { x: metric }), fill: "#64748b" }),
               Plot.ruleY([0]),
@@ -155,10 +223,11 @@ export default function ChartView({ data, suggestion }: Props) {
           const counted = countByGroup(rows, groupBy);
           const domain = ORDINAL_ORDERS[groupBy];
           chart = Plot.plot({
+            height: 200,
             marginLeft: 140,
             x: { label: "Count" },
             y: {
-              label: groupBy,
+              label: truncLabel(groupBy),
               domain: domain || undefined,
             },
             marks: [
@@ -181,9 +250,10 @@ export default function ChartView({ data, suggestion }: Props) {
           agg.sort((a, b) => Number(b[metric]) - Number(a[metric]));
           const limited = agg.slice(0, suggestion.limit || 10);
           chart = Plot.plot({
+            height: 200,
             marginLeft: 100,
-            x: { label: metric },
-            y: { label: groupBy },
+            x: { label: truncLabel(metric) },
+            y: { label: truncLabel(groupBy) },
             marks: [
               Plot.barX(limited, {
                 y: groupBy,
@@ -225,7 +295,25 @@ export default function ChartView({ data, suggestion }: Props) {
 
   return (
     <div className="view-card chart-view">
-      <h3 className="chart-title">{title}</h3>
+      <div className="chart-header">
+        <h3 className="chart-title">{title}</h3>
+        {alternatives.length > 0 && (
+          <div className="view-switcher">
+            <span className="view-chip active">
+              {VIEW_TYPE_LABELS[suggestion.view_type] || suggestion.view_type}
+            </span>
+            {alternatives.map((alt, i) => (
+              <button
+                key={i}
+                className="view-chip"
+                onClick={() => onSwap?.(alt)}
+              >
+                {VIEW_TYPE_LABELS[alt.view_type] || alt.view_type}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div ref={containerRef} />
     </div>
   );

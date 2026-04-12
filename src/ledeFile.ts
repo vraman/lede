@@ -142,6 +142,7 @@ export function parseLede(content: string): LedeDocument {
       limit: null,
       x_col: null,
       y_col: null,
+      shown_by_default: true,
     };
 
     const lines = block.split("\n");

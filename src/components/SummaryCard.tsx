@@ -14,6 +14,8 @@ export default function SummaryCard({ data, suggestion }: Props) {
 
   const values = data.sample_rows.map((row) => parseFloat(row[colIndex])).filter((n) => !isNaN(n));
 
+  if (values.length === 0) return null;
+
   let value: number;
   let label: string;
 

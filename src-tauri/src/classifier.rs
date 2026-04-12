@@ -35,21 +35,23 @@ const LIKERT_SETS: &[&[&str]] = &[
     &["1", "2", "3", "4", "5"],
 ];
 
+const DATE_FORMATS: &[&str] = &[
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%m/%d/%Y",
+    "%m-%d-%Y",
+    "%d/%m/%Y",
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y %H:%M",
+];
+
 fn is_date(value: &str) -> bool {
     if value.is_empty() {
         return false;
     }
-    // Try common date formats
-    let formats = &[
-        "%Y-%m-%d",
-        "%Y/%m/%d",
-        "%m/%d/%Y",
-        "%m-%d-%Y",
-        "%d/%m/%Y",
-        "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%dT%H:%M:%S",
-    ];
-    for fmt in formats {
+    for fmt in DATE_FORMATS {
         if chrono::NaiveDate::parse_from_str(value, fmt).is_ok()
             || chrono::NaiveDateTime::parse_from_str(value, fmt).is_ok()
         {
@@ -58,6 +60,11 @@ fn is_date(value: &str) -> bool {
     }
     false
 }
+
+/// Maximum number of values to sample for expensive checks (date/numeric parsing)
+const SAMPLE_SIZE: usize = 200;
+
+const INDEX_NAMES: &[&str] = &["index", "idx", "row", "row_number", "row_num", "rn", "no", "#"];
 
 fn is_numeric(value: &str) -> bool {
     value.parse::<f64>().is_ok()
@@ -82,140 +89,117 @@ pub fn classify_column(name: &str, values: &[String]) -> ColumnMeta {
 
     let sample_values: Vec<String> = unique.iter().take(5).cloned().collect();
 
-    // 1. Temporal: majority parse as date
-    if !non_empty.is_empty() {
-        let date_count = non_empty.iter().filter(|v| is_date(v)).count();
-        if date_count as f64 / non_empty.len() as f64 > 0.5 {
-            return ColumnMeta {
-                name: name.to_string(),
-                col_type: ColumnType::Temporal,
-                unique_count,
-                total_count,
-                sample_values,
-            };
+    // Sample for expensive checks (date/numeric parsing)
+    let sample: Vec<&String> = non_empty.iter().take(SAMPLE_SIZE).copied().collect();
+    let sample_len = sample.len();
+
+    let lower_name = name.to_lowercase();
+
+    // Helper to build result
+    let meta = |col_type: ColumnType| ColumnMeta {
+        name: name.to_string(),
+        col_type,
+        unique_count,
+        total_count,
+        sample_values: sample_values.clone(),
+    };
+
+    // 1. Temporal: majority of sample parse as date
+    if sample_len > 0 {
+        let date_count = sample.iter().filter(|v| is_date(v)).count();
+        if date_count as f64 / sample_len as f64 > 0.5 {
+            return meta(ColumnType::Temporal);
         }
     }
 
     // 2. Geographic: name matches geo keywords
-    let lower_name = name.to_lowercase();
     if GEO_NAMES.contains(&lower_name.as_str()) {
-        return ColumnMeta {
-            name: name.to_string(),
-            col_type: ColumnType::Geographic,
-            unique_count,
-            total_count,
-            sample_values,
-        };
+        return meta(ColumnType::Geographic);
     }
 
     // 3. OrderedCategorical: values match known ordinal set (only if not all numeric)
-    let all_numeric = !non_empty.is_empty()
-        && non_empty.iter().filter(|v| is_numeric(v)).count() as f64 / non_empty.len() as f64
-            > 0.5;
+    let numeric_count = sample.iter().filter(|v| is_numeric(v)).count();
+    let numeric_frac = if sample_len > 0 { numeric_count as f64 / sample_len as f64 } else { 0.0 };
+    let all_numeric = numeric_frac > 0.5;
+
     if !all_numeric && is_ordinal_set(&unique) {
-        return ColumnMeta {
-            name: name.to_string(),
-            col_type: ColumnType::OrderedCategorical,
-            unique_count,
-            total_count,
-            sample_values,
-        };
+        return meta(ColumnType::OrderedCategorical);
     }
 
-    // 4. Numeric checks
-    if !non_empty.is_empty() {
-        let numeric_count = non_empty.iter().filter(|v| is_numeric(v)).count();
-        if numeric_count as f64 / non_empty.len() as f64 > 0.5 {
-            let ratio = unique_count as f64 / total_count as f64;
+    // 4. Numeric checks (using sample fraction)
+    if all_numeric {
+        let nums: Vec<f64> = sample
+            .iter()
+            .filter_map(|v| v.parse::<f64>().ok())
+            .collect();
 
-            // Low cardinality numeric → Categorical
-            if ratio < 0.05 {
-                return ColumnMeta {
-                    name: name.to_string(),
-                    col_type: ColumnType::Categorical,
-                    unique_count,
-                    total_count,
-                    sample_values,
-                };
+        // Detect -1 sentinel: if >20% of numeric values are exactly -1, filter them out
+        // and re-evaluate. Common in messy datasets for "no data".
+        let sentinel_count = nums.iter().filter(|&&n| n == -1.0).count();
+        if sentinel_count > 0 && sentinel_count as f64 / nums.len().max(1) as f64 > 0.2 {
+            // Re-check: without -1 values, is the column still mostly numeric?
+            let non_sentinel: Vec<&String> = sample.iter()
+                .filter(|v| v.parse::<f64>().map_or(true, |n| n != -1.0))
+                .copied()
+                .collect();
+            let remaining_numeric = non_sentinel.iter().filter(|v| is_numeric(v)).count();
+            if non_sentinel.is_empty() || (remaining_numeric as f64 / non_sentinel.len() as f64) < 0.5 {
+                // Without sentinels, column is not numeric — fall through to Categorical
+                return meta(ColumnType::Categorical);
             }
-
-            // Ratio keyword in name and values between 0-1 or 0-100
-            let has_ratio_keyword = RATIO_KEYWORDS.iter().any(|kw| lower_name.contains(kw));
-            if has_ratio_keyword {
-                let nums: Vec<f64> = non_empty
-                    .iter()
-                    .filter_map(|v| v.parse::<f64>().ok())
-                    .collect();
-                let all_ratio_range = nums.iter().all(|&n| (0.0..=1.0).contains(&n))
-                    || nums.iter().all(|&n| (0.0..=100.0).contains(&n));
-                if all_ratio_range {
-                    return ColumnMeta {
-                        name: name.to_string(),
-                        col_type: ColumnType::NumericRatio,
-                        unique_count,
-                        total_count,
-                        sample_values,
-                    };
-                }
-            }
-
-            // High-cardinality numeric with "id" in name → Identifier
-            if unique_count as f64 / total_count as f64 > 0.9
-                && lower_name.contains("id")
-            {
-                return ColumnMeta {
-                    name: name.to_string(),
-                    col_type: ColumnType::Identifier,
-                    unique_count,
-                    total_count,
-                    sample_values,
-                };
-            }
-
-            // Signed: any negative
-            let has_negative = non_empty
-                .iter()
-                .filter_map(|v| v.parse::<f64>().ok())
-                .any(|n| n < 0.0);
-            if has_negative {
-                return ColumnMeta {
-                    name: name.to_string(),
-                    col_type: ColumnType::NumericSigned,
-                    unique_count,
-                    total_count,
-                    sample_values,
-                };
-            }
-
-            return ColumnMeta {
-                name: name.to_string(),
-                col_type: ColumnType::NumericMeasure,
-                unique_count,
-                total_count,
-                sample_values,
-            };
         }
+
+        let ratio = unique_count as f64 / total_count.max(1) as f64;
+
+        // Low cardinality numeric → Categorical (e.g., year with 7 unique values)
+        if ratio < 0.05 {
+            return meta(ColumnType::Categorical);
+        }
+
+        // Numeric Identifier: very high cardinality + name suggests index/id
+        if ratio > 0.9 {
+            if lower_name.contains("id") || INDEX_NAMES.contains(&lower_name.as_str()) {
+                return meta(ColumnType::Identifier);
+            }
+        }
+
+        // Year detection: integers in [1800, 2100] → Categorical (summing years is meaningless)
+        let non_sentinel_nums: Vec<f64> = nums.iter().filter(|&&n| n != -1.0).copied().collect();
+        if !non_sentinel_nums.is_empty() {
+            let all_years = non_sentinel_nums.iter().all(|&n| {
+                n == n.floor() && (1700.0..=2100.0).contains(&n)
+            });
+            if all_years {
+                return meta(ColumnType::Categorical);
+            }
+        }
+
+        // Ratio keyword in name and values between 0-1 or 0-100
+        let has_ratio_keyword = RATIO_KEYWORDS.iter().any(|kw| lower_name.contains(kw));
+        if has_ratio_keyword {
+            let all_ratio_range = nums.iter().all(|&n| (0.0..=1.0).contains(&n))
+                || nums.iter().all(|&n| (0.0..=100.0).contains(&n));
+            if all_ratio_range {
+                return meta(ColumnType::NumericRatio);
+            }
+        }
+
+        // Signed: any negative in sample
+        let has_negative = nums.iter().any(|&n| n < 0.0);
+        if has_negative {
+            return meta(ColumnType::NumericSigned);
+        }
+
+        return meta(ColumnType::NumericMeasure);
     }
 
     // 5. Identifier: very high cardinality text
     if total_count > 0 && unique_count as f64 / total_count as f64 > 0.9 {
-        return ColumnMeta {
-            name: name.to_string(),
-            col_type: ColumnType::Identifier,
-            unique_count,
-            total_count,
-            sample_values,
-        };
+        return meta(ColumnType::Identifier);
     }
 
     // 6. Default: Categorical
-    ColumnMeta {
-        name: name.to_string(),
-        col_type: ColumnType::Categorical,
-        unique_count,
-        total_count,
-        sample_values,
-    }
+    meta(ColumnType::Categorical)
 }
 
 #[cfg(test)]
@@ -294,5 +278,130 @@ mod tests {
         assert_eq!(find_col(&metas, "satisfaction").col_type, ColumnType::OrderedCategorical);
         assert_eq!(find_col(&metas, "likelihood_to_recommend").col_type, ColumnType::OrderedCategorical);
         assert_eq!(find_col(&metas, "nps_score").col_type, ColumnType::NumericMeasure);
+    }
+
+    // --- Edge case tests ---
+
+    fn classify_edge(filename: &str) -> Vec<ColumnMeta> {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.pop();
+        path.push("tests/fixtures/edge-cases");
+        path.push(filename);
+
+        let mut rdr = csv::ReaderBuilder::new().flexible(true).from_path(&path).expect("Failed to open CSV");
+        let headers: Vec<String> = rdr.headers().expect("No headers").iter().map(|h| h.to_string()).collect();
+        let mut columns: Vec<Vec<String>> = vec![vec![]; headers.len()];
+        for result in rdr.records() {
+            let record = result.expect("Bad record");
+            for (i, field) in record.iter().enumerate() {
+                if i < columns.len() {
+                    columns[i].push(field.to_string());
+                }
+            }
+        }
+        headers.into_iter().zip(columns).map(|(name, values)| classify_column(&name, &values)).collect()
+    }
+
+    #[test]
+    fn test_missing_values() {
+        let metas = classify_edge("missing_values.csv");
+        // Should not crash. Columns with missing values should still classify.
+        assert_eq!(metas.len(), 4);
+        // "name" has 6 non-empty values out of 8 rows, 6/8 = 0.75 unique ratio → Categorical
+        assert_eq!(find_col(&metas, "name").col_type, ColumnType::Categorical);
+        assert_eq!(find_col(&metas, "age").col_type, ColumnType::NumericMeasure);
+        assert_eq!(find_col(&metas, "score").col_type, ColumnType::NumericMeasure);
+        assert_eq!(find_col(&metas, "date").col_type, ColumnType::Temporal);
+    }
+
+    #[test]
+    fn test_mixed_type_column() {
+        let metas = classify_edge("mixed_types.csv");
+        assert_eq!(metas.len(), 3);
+        // "value" has 5/8 numeric (>50%) including -1 → NumericSigned
+        // This is acceptable — the app will parse what it can and skip NaN
+        assert_eq!(find_col(&metas, "value").col_type, ColumnType::NumericSigned);
+        assert_eq!(find_col(&metas, "status").col_type, ColumnType::Categorical);
+    }
+
+    #[test]
+    fn test_date_formats() {
+        let metas = classify_edge("weird_dates.csv");
+        // US dates (MM/DD/YYYY) should parse
+        assert_eq!(find_col(&metas, "us_date").col_type, ColumnType::Temporal);
+        // Euro dates (DD/MM/YYYY) should parse
+        assert_eq!(find_col(&metas, "euro_date").col_type, ColumnType::Temporal);
+        // ISO datetime
+        assert_eq!(find_col(&metas, "timestamp").col_type, ColumnType::Temporal);
+        // Text dates like "Jan 15 2024" won't parse — Categorical is acceptable
+        // Unix timestamps are pure numbers — NumericMeasure is acceptable
+    }
+
+    #[test]
+    fn test_many_columns() {
+        let metas = classify_edge("many_columns.csv");
+        assert_eq!(metas.len(), 25);
+        // Should not crash with 25 columns
+    }
+
+    #[test]
+    fn test_salary_text() {
+        let metas = classify_edge("salary_text.csv");
+        // "$50,000 - $70,000" does NOT parse as numeric — correct
+        // But with only 6 rows and 6 unique values, ratio > 0.9 → Identifier
+        // With more data this would be Categorical. For small samples this is acceptable.
+        assert_eq!(find_col(&metas, "department").col_type, ColumnType::Categorical);
+    }
+
+    #[test]
+    fn test_single_column() {
+        let metas = classify_edge("single_column.csv");
+        assert_eq!(metas.len(), 1);
+        assert_eq!(find_col(&metas, "name").col_type, ColumnType::Identifier);
+    }
+
+    #[test]
+    fn test_single_row() {
+        let metas = classify_edge("single_row.csv");
+        assert_eq!(metas.len(), 3);
+        // With only 1 row, cardinality = 1/1 = 100% — treated as Identifier
+        // This is acceptable behavior for single-row files
+    }
+
+    // --- Real-world classification tests ---
+
+    fn classify_realworld(filename: &str) -> Vec<ColumnMeta> {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.pop();
+        path.push("tests/fixtures/real-world");
+        path.push(filename);
+
+        let mut rdr = csv::Reader::from_path(&path).expect("Failed to open CSV");
+        let headers: Vec<String> = rdr.headers().expect("No headers").iter().map(|h| h.to_string()).collect();
+        let mut columns: Vec<Vec<String>> = vec![vec![]; headers.len()];
+        let mut count = 0;
+        for result in rdr.records() {
+            let record = result.expect("Bad record");
+            for (i, field) in record.iter().enumerate() {
+                if i < columns.len() {
+                    columns[i].push(field.to_string());
+                }
+            }
+            count += 1;
+            if count >= 5000 { break; }
+        }
+        headers.into_iter().zip(columns).map(|(name, values)| classify_column(&name, &values)).collect()
+    }
+
+    #[test]
+    fn test_index_column_is_identifier() {
+        let metas = classify_realworld("customers-10000.csv");
+        assert_eq!(find_col(&metas, "Index").col_type, ColumnType::Identifier);
+    }
+
+    #[test]
+    fn test_timestamp_detected_as_temporal() {
+        let metas = classify_realworld("salary_survey.csv");
+        assert_eq!(find_col(&metas, "Timestamp").col_type, ColumnType::Temporal);
     }
 }

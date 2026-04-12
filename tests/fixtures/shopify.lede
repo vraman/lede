@@ -1,0 +1,50 @@
+---
+title: shopify
+created: 2026-04-12
+sources:
+  - shopify.csv
+---
+
+Interesting
+
+```dataview
+source: shopify.csv
+view: summary_card
+metric: revenue
+aggregate: sum
+suggested_by: rule
+last_verified: 2026-04-12
+insight: null
+```
+
+```dataview
+source: shopify.csv
+view: line_chart
+metric: revenue
+aggregate: sum
+group_by: date
+suggested_by: rule
+last_verified: 2026-04-12
+insight: null
+```
+
+```dataview
+source: shopify.csv
+view: bar_chart
+metric: revenue
+aggregate: sum
+group_by: product
+sort: desc
+suggested_by: rule
+last_verified: 2026-04-12
+insight: null
+```
+
+```dataview
+source: shopify.csv
+view: scatter_plot
+aggregate: sum
+suggested_by: rule
+last_verified: 2026-04-12
+insight: null
+```
