@@ -228,6 +228,14 @@ function App() {
     });
   };
 
+  const handleChangeAggregate = (index: number, agg: ViewSuggestion["aggregate"]) => {
+    setVisibleViews((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], aggregate: agg };
+      return updated;
+    });
+  };
+
   const summaryCards = visibleViews.filter((v) => v.view_type === "SummaryCard");
   const charts = visibleViews.filter(
     (v) => v.view_type !== "SummaryCard" && v.view_type !== "Table"
@@ -276,6 +284,7 @@ function App() {
                   suggestion={s}
                   alternatives={alternatives}
                   onSwap={(alt) => handleSwapView(viewIndex, alt)}
+                  onChangeAggregate={(agg) => handleChangeAggregate(viewIndex, agg)}
                 />
               );
             })}

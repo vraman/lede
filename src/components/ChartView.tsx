@@ -7,7 +7,10 @@ interface Props {
   suggestion: ViewSuggestion;
   alternatives?: ViewSuggestion[];
   onSwap?: (alt: ViewSuggestion) => void;
+  onChangeAggregate?: (agg: ViewSuggestion["aggregate"]) => void;
 }
+
+const ALL_AGGREGATES: ViewSuggestion["aggregate"][] = ["Sum", "Avg", "Min", "Max", "Count"];
 
 const ORDINAL_ORDERS: Record<string, string[]> = {
   satisfaction: [
@@ -110,7 +113,7 @@ const VIEW_TYPE_LABELS: Record<string, string> = {
   Heatmap: "Heatmap",
 };
 
-export default function ChartView({ data, suggestion, alternatives = [], onSwap }: Props) {
+export default function ChartView({ data, suggestion, alternatives = [], onSwap, onChangeAggregate }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -286,33 +289,54 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap 
     };
   }, [data, suggestion]);
 
+  const aggLabel = suggestion.aggregate.toLowerCase();
+  const hasMetricAgg = suggestion.metric && suggestion.group_by
+    && suggestion.view_type !== "CountBar"
+    && suggestion.view_type !== "OrderedBar"
+    && suggestion.view_type !== "Histogram";
+
   const title =
     suggestion.view_type === "ScatterPlot"
       ? `${suggestion.x_col} vs ${suggestion.y_col}`
       : suggestion.view_type === "CountBar" || suggestion.view_type === "OrderedBar"
         ? `${suggestion.group_by} (count)`
-        : `${suggestion.metric} by ${suggestion.group_by || "value"}`;
+        : suggestion.view_type === "Histogram"
+          ? `${suggestion.metric} (distribution)`
+          : `${aggLabel} of ${suggestion.metric} by ${suggestion.group_by || "value"}`;
 
   return (
     <div className="view-card chart-view">
       <div className="chart-header">
         <h3 className="chart-title">{title}</h3>
-        {alternatives.length > 0 && (
-          <div className="view-switcher">
-            <span className="view-chip active">
-              {VIEW_TYPE_LABELS[suggestion.view_type] || suggestion.view_type}
-            </span>
-            {alternatives.map((alt, i) => (
-              <button
-                key={i}
-                className="view-chip"
-                onClick={() => onSwap?.(alt)}
-              >
-                {VIEW_TYPE_LABELS[alt.view_type] || alt.view_type}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="chart-controls">
+          {hasMetricAgg && onChangeAggregate && (
+            <select
+              className="agg-select"
+              value={suggestion.aggregate}
+              onChange={(e) => onChangeAggregate(e.target.value as ViewSuggestion["aggregate"])}
+            >
+              {ALL_AGGREGATES.map((agg) => (
+                <option key={agg} value={agg}>{agg.toLowerCase()}</option>
+              ))}
+            </select>
+          )}
+          {alternatives.length > 0 && (
+            <div className="view-switcher">
+              <span className="view-chip active">
+                {VIEW_TYPE_LABELS[suggestion.view_type] || suggestion.view_type}
+              </span>
+              {alternatives.map((alt, i) => (
+                <button
+                  key={i}
+                  className="view-chip"
+                  onClick={() => onSwap?.(alt)}
+                >
+                  {VIEW_TYPE_LABELS[alt.view_type] || alt.view_type}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
       <div ref={containerRef} />
     </div>
