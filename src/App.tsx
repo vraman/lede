@@ -2,53 +2,58 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
+import { JSONContent } from "@tiptap/react";
+import { Editor } from "@tiptap/react";
 import { ParsedCSV, ViewSuggestion } from "./types";
-import SummaryCard from "./components/SummaryCard";
-import ChartView from "./components/ChartView";
-import DataTable from "./components/DataTable";
+import { DataContext } from "./DataContext";
 import ProseEditor from "./components/ProseEditor";
 import HomeScreen from "./components/HomeScreen";
-import { serializeLede, parseLede, LedeDocument } from "./ledeFile";
+import {
+  serializeFromEditor,
+  parseToEditorJSON,
+  LedeMeta,
+} from "./ledeFile";
 import "./App.css";
+
+/** Build an initial Tiptap document from suggestions. */
+function buildInitialDoc(suggestions: ViewSuggestion[]): JSONContent {
+  const defaults = suggestions.filter((s) => s.shown_by_default);
+  const summaryCards = defaults.filter((s) => s.view_type === "SummaryCard");
+  const charts = defaults.filter(
+    (s) => s.view_type !== "SummaryCard" && s.view_type !== "Table"
+  );
+
+  const nodes: JSONContent[] = [];
+  nodes.push({ type: "paragraph" });
+
+  for (const card of summaryCards) {
+    nodes.push({ type: "dataview", attrs: { viewConfig: card } });
+    nodes.push({ type: "paragraph" });
+  }
+
+  for (const chart of charts) {
+    nodes.push({ type: "dataview", attrs: { viewConfig: chart } });
+    nodes.push({ type: "paragraph" });
+  }
+
+  if (nodes[nodes.length - 1]?.type !== "paragraph") {
+    nodes.push({ type: "paragraph" });
+  }
+
+  return { type: "doc", content: nodes };
+}
 
 function App() {
   const [data, setData] = useState<ParsedCSV | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [prose, setProse] = useState("<p>Write your analysis here...</p>");
   const [sourcePath, setSourcePath] = useState<string>("");
-  const [visibleViews, setVisibleViews] = useState<ViewSuggestion[]>([]);
-  // Ref to pass saved views from .lede file to the data-load useEffect
-  const ledeViewsRef = useRef<ViewSuggestion[] | null>(null);
-
-  // Progressive rendering: show views one at a time
-  useEffect(() => {
-    if (!data) return;
-
-    // If loading from a .lede file, use saved views instead of auto-generated
-    if (ledeViewsRef.current) {
-      setVisibleViews(ledeViewsRef.current);
-      ledeViewsRef.current = null;
-      return;
-    }
-
-    setVisibleViews([]);
-    const defaults = data.suggestions.filter((s) => s.shown_by_default);
-    const summaryCards = defaults.filter((s) => s.view_type === "SummaryCard");
-    const others = defaults.filter((s) => s.view_type !== "SummaryCard");
-    const ordered = [...summaryCards, ...others];
-
-    const timers: ReturnType<typeof setTimeout>[] = [];
-    ordered.forEach((view, i) => {
-      timers.push(
-        setTimeout(() => {
-          setVisibleViews((prev) => [...prev, view]);
-        }, i * 100)
-      );
-    });
-
-    return () => timers.forEach(clearTimeout);
-  }, [data]);
+  const [editorContent, setEditorContent] = useState<JSONContent>({
+    type: "doc",
+    content: [{ type: "paragraph" }],
+  });
+  const editorInstanceRef = useRef<Editor | null>(null);
+  const metaRef = useRef<LedeMeta | null>(null);
 
   const handleFilePick = useCallback(async () => {
     try {
@@ -60,11 +65,11 @@ function App() {
         ],
       });
       if (selected) {
-        const path = typeof selected === "string" ? selected : selected;
-        if (String(path).endsWith(".lede")) {
-          await loadLedeFile(String(path));
+        const path = String(selected);
+        if (path.endsWith(".lede")) {
+          await loadLedeFile(path);
         } else {
-          await loadCSV(String(path));
+          await loadCSV(path);
         }
       }
     } catch (e) {
@@ -79,7 +84,8 @@ function App() {
       const result = await invoke<ParsedCSV>("parse_csv", { path });
       setData(result);
       setSourcePath(path);
-      setProse("<p>Write your analysis here...</p>");
+      setEditorContent(buildInitialDoc(result.suggestions));
+      metaRef.current = null;
       const title = path.split("/").pop()?.replace(".csv", "") || "Untitled";
       invoke("add_recent_file", { path, title }).catch(() => {});
     } catch (e) {
@@ -92,26 +98,22 @@ function App() {
   const loadLedeFile = async (path: string) => {
     try {
       const content = await readTextFile(path);
-      const doc = parseLede(content);
-      setProse(doc.prose || "<p>Write your analysis here...</p>");
-      const title = doc.title || path.split("/").pop()?.replace(".lede", "") || "Untitled";
+      const { meta, json } = parseToEditorJSON(content);
+      metaRef.current = meta;
+
+      const title =
+        meta.title || path.split("/").pop()?.replace(".lede", "") || "Untitled";
       invoke("add_recent_file", { path, title }).catch(() => {});
 
-      // Stage saved views so the useEffect picks them up when data arrives
-      if (doc.views.length > 0) {
-        ledeViewsRef.current = doc.views;
-      }
-
-      // If there are source files, try to load the first one
-      if (doc.sources.length > 0) {
-        const csvPath = doc.sources[0];
-        // Try absolute path first, then relative to the lede file
+      if (meta.sources.length > 0) {
+        const csvPath = meta.sources[0];
         try {
-          const result = await invoke<ParsedCSV>("parse_csv", { path: csvPath });
+          const result = await invoke<ParsedCSV>("parse_csv", {
+            path: csvPath,
+          });
           setData(result);
           setSourcePath(csvPath);
         } catch {
-          // Try relative path
           const dir = path.substring(0, path.lastIndexOf("/") + 1);
           try {
             const result = await invoke<ParsedCSV>("parse_csv", {
@@ -119,15 +121,54 @@ function App() {
             });
             setData(result);
             setSourcePath(dir + csvPath);
-          } catch (e) {
+          } catch {
             setError(`Could not load source CSV: ${csvPath}`);
           }
         }
       }
+
+      setEditorContent(json);
     } catch (e) {
       setError(String(e));
     }
   };
+
+  const handleSave = useCallback(async () => {
+    if (!data) return;
+
+    const editor = editorInstanceRef.current;
+    const currentJSON = editor ? editor.getJSON() : editorContent;
+
+    const filename =
+      sourcePath.split("/").pop()?.replace(".csv", "") || "untitled";
+    const today = new Date().toISOString().split("T")[0];
+
+    const meta: LedeMeta = metaRef.current || {
+      title: filename,
+      created: today,
+      sources: sourcePath
+        ? [sourcePath.split("/").pop() || sourcePath]
+        : [],
+    };
+
+    const fileContent = serializeFromEditor(meta, currentJSON);
+
+    try {
+      const savePath = await save({
+        filters: [{ name: "Lede", extensions: ["lede"] }],
+        defaultPath: `${filename}.lede`,
+      });
+      if (savePath) {
+        await writeTextFile(savePath, fileContent);
+        invoke("add_recent_file", {
+          path: savePath,
+          title: meta.title || filename,
+        }).catch(() => {});
+      }
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [data, sourcePath, editorContent]);
 
   // Cmd+S to save
   useEffect(() => {
@@ -139,39 +180,9 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [data, prose, sourcePath, visibleViews]);
+  }, [handleSave]);
 
-  const handleSave = async () => {
-    if (!data) return;
-
-    const filename = sourcePath.split("/").pop()?.replace(".csv", "") || "untitled";
-    const today = new Date().toISOString().split("T")[0];
-
-    const doc: LedeDocument = {
-      title: filename,
-      created: today,
-      sources: sourcePath ? [sourcePath.split("/").pop() || sourcePath] : [],
-      prose,
-      views: visibleViews,
-    };
-
-    const content = serializeLede(doc);
-
-    try {
-      const savePath = await save({
-        filters: [{ name: "Lede", extensions: ["lede"] }],
-        defaultPath: `${filename}.lede`,
-      });
-      if (savePath) {
-        await writeTextFile(savePath, content);
-        invoke("add_recent_file", { path: savePath, title: filename }).catch(() => {});
-      }
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  // Handle Tauri drag-and-drop via event listener
+  // Tauri drag-and-drop
   useEffect(() => {
     const unlisten = setupDragDrop();
     return () => {
@@ -181,7 +192,9 @@ function App() {
 
   const setupDragDrop = async () => {
     try {
-      const { getCurrentWebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const { getCurrentWebviewWindow } = await import(
+        "@tauri-apps/api/webviewWindow"
+      );
       const currentWindow = getCurrentWebviewWindow();
       const unlisten = await currentWindow.onDragDropEvent((event) => {
         if (event.payload.type === "drop") {
@@ -219,84 +232,34 @@ function App() {
     );
   }
 
-  const handleSwapView = (index: number, newView: ViewSuggestion) => {
-    setVisibleViews((prev) => {
-      const updated = [...prev];
-      updated[index] = newView;
-      return updated;
-    });
-  };
-
-  const handleChangeAggregate = (index: number, agg: ViewSuggestion["aggregate"]) => {
-    setVisibleViews((prev) => {
-      const updated = [...prev];
-      updated[index] = { ...updated[index], aggregate: agg };
-      return updated;
-    });
-  };
-
-  const summaryCards = visibleViews.filter((v) => v.view_type === "SummaryCard");
-  const charts = visibleViews.filter(
-    (v) => v.view_type !== "SummaryCard" && v.view_type !== "Table"
-  );
-
   return (
-    <main className="app workspace">
-      <header className="app-header">
-        <h1>Lede</h1>
-        <div className="header-actions">
-          <button onClick={handleFilePick} className="btn-secondary">
-            Open
-          </button>
-          <button onClick={handleSave} className="btn-primary">
-            Save
-          </button>
-        </div>
-      </header>
-
-      {error && <p className="error">{error}</p>}
-
-      <div className="workspace-layout">
-        <div className="views-panel">
-          {summaryCards.length > 0 && (
-            <div className="summary-row">
-              {summaryCards.map((s, i) => (
-                <SummaryCard key={i} data={data} suggestion={s} />
-              ))}
-            </div>
-          )}
-
-          <div className="charts-grid">
-            {charts.map((s) => {
-              const viewIndex = visibleViews.indexOf(s);
-              const alternatives = data.suggestions.filter(
-                (alt) =>
-                  alt.view_type !== s.view_type &&
-                  alt.metric === s.metric &&
-                  alt.group_by === s.group_by &&
-                  alt.view_type !== "SummaryCard"
-              );
-              return (
-                <ChartView
-                  key={`${viewIndex}-${s.view_type}`}
-                  data={data}
-                  suggestion={s}
-                  alternatives={alternatives}
-                  onSwap={(alt) => handleSwapView(viewIndex, alt)}
-                  onChangeAggregate={(agg) => handleChangeAggregate(viewIndex, agg)}
-                />
-              );
-            })}
+    <DataContext.Provider value={{ data, suggestions: data.suggestions }}>
+      <main className="app workspace">
+        <header className="app-header">
+          <h1>Lede</h1>
+          <div className="header-actions">
+            <button onClick={handleFilePick} className="btn-secondary">
+              Open
+            </button>
+            <button onClick={handleSave} className="btn-primary">
+              Save
+            </button>
           </div>
+        </header>
 
-          <DataTable data={data} />
-        </div>
+        {error && <p className="error">{error}</p>}
 
-        <div className="prose-panel">
-          <ProseEditor content={prose} onUpdate={setProse} />
+        <div className="editor-layout">
+          <ProseEditor
+            initialContent={editorContent}
+            onUpdate={setEditorContent}
+            editorRef={(editor) => {
+              editorInstanceRef.current = editor;
+            }}
+          />
         </div>
-      </div>
-    </main>
+      </main>
+    </DataContext.Provider>
   );
 }
 
