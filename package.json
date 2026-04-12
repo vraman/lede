@@ -16,6 +16,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.0",
     "@tauri-apps/plugin-fs": "^2.5.0",
     "@tauri-apps/plugin-opener": "^2",
+    "@tiptap/extension-placeholder": "^3.22.3",
     "@tiptap/pm": "^3.22.3",
     "@tiptap/react": "^3.22.3",
     "@tiptap/starter-kit": "^3.22.3",

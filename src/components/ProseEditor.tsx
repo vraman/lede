@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useEditor, EditorContent, JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import Placeholder from "@tiptap/extension-placeholder";
 import { DataviewNode } from "../extensions/DataviewNode";
 import { Editor } from "@tiptap/react";
 
@@ -16,7 +17,13 @@ export default function ProseEditor({
   editorRef,
 }: Props) {
   const editor = useEditor({
-    extensions: [StarterKit, DataviewNode],
+    extensions: [
+      StarterKit,
+      DataviewNode,
+      Placeholder.configure({
+        placeholder: "Write your analysis here...",
+      }),
+    ],
     content: initialContent,
     onUpdate: ({ editor }) => {
       onUpdate(editor.getJSON());

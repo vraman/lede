@@ -28,6 +28,7 @@ pub enum Aggregate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewSuggestion {
     pub view_type: ViewType,
+    pub title: String,
     pub metric: Option<String>,
     pub group_by: Option<String>,
     pub aggregate: Aggregate,
@@ -36,6 +37,64 @@ pub struct ViewSuggestion {
     pub x_col: Option<String>,
     pub y_col: Option<String>,
     pub shown_by_default: bool,
+}
+
+/// Build a human-readable chart title.
+fn humanize_title(
+    view_type: &ViewType,
+    metric: Option<&str>,
+    group_by: Option<&str>,
+    x_col: Option<&str>,
+    y_col: Option<&str>,
+    is_temporal_group: bool,
+) -> String {
+    match view_type {
+        ViewType::SummaryCard => {
+            let m = metric.unwrap_or("value");
+            capitalize(m)
+        }
+        ViewType::ScatterPlot => {
+            let x = capitalize(x_col.unwrap_or("x"));
+            let y = capitalize(y_col.unwrap_or("y"));
+            format!("{} vs {}", x, y)
+        }
+        ViewType::CountBar | ViewType::OrderedBar => {
+            let g = group_by.unwrap_or("value");
+            format!("{} breakdown", capitalize(g))
+        }
+        ViewType::Histogram => {
+            let m = metric.unwrap_or("value");
+            format!("{} distribution", capitalize(m))
+        }
+        _ => {
+            // LineChart, BarChart, RankedList, etc.
+            let m = capitalize(metric.unwrap_or("value"));
+            if let Some(g) = group_by {
+                if is_temporal_group {
+                    format!("{} over time", m)
+                } else {
+                    format!("{} by {}", m, prettify(g))
+                }
+            } else {
+                m
+            }
+        }
+    }
+}
+
+/// Capitalize first letter, replace underscores with spaces.
+fn capitalize(s: &str) -> String {
+    let s = prettify(s);
+    let mut chars = s.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(c) => c.to_uppercase().to_string() + &chars.as_str().to_lowercase(),
+    }
+}
+
+/// Replace underscores with spaces, lowercase.
+fn prettify(s: &str) -> String {
+    s.replace('_', " ")
 }
 
 pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
@@ -91,17 +150,22 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
 
     // --- Phase 1: Primary suggestions (highest priority first) ---
 
+    // Helper: check if a column name is temporal
+    let is_temporal = |name: &str| -> bool {
+        columns.iter().any(|c| c.name == name && c.col_type == ColumnType::Temporal)
+    };
+
     // 1. Summary card for primary metric
     if let Some(num) = primary_metric {
         let agg = default_aggregate(num);
-        suggestions.push(make_view(ViewType::SummaryCard, Some(&num.name), None, agg));
+        suggestions.push(make_view(ViewType::SummaryCard, Some(&num.name), None, agg, false));
     }
 
     // 2. Line chart (temporal + primary metric)
     if let Some(temp) = temporal {
         if let Some(num) = primary_metric {
             let agg = default_aggregate(num);
-            suggestions.push(make_view(ViewType::LineChart, Some(&num.name), Some(&temp.name), agg));
+            suggestions.push(make_view(ViewType::LineChart, Some(&num.name), Some(&temp.name), agg, true));
         }
     }
 
@@ -113,16 +177,16 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
         if let Some(num) = primary_metric {
             let agg = default_aggregate(num);
             if cat.unique_count > 20 {
-                suggestions.push(make_ranked_list(&num.name, &cat.name, agg));
+                suggestions.push(make_ranked_list(&num.name, &cat.name, agg, false));
             } else {
-                suggestions.push(make_bar_chart(&num.name, &cat.name, agg));
+                suggestions.push(make_bar_chart(&num.name, &cat.name, agg, false));
             }
         }
     }
 
     // 4. Ordered bar for ALL ordinal columns (no break)
     for ord in &ordered_cats {
-        suggestions.push(make_view(ViewType::OrderedBar, None, Some(&ord.name), Aggregate::Count));
+        suggestions.push(make_view(ViewType::OrderedBar, None, Some(&ord.name), Aggregate::Count, false));
     }
 
     // 5. count_bar when no numeric columns exist
@@ -131,14 +195,16 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
             if cat.unique_count == 0 || cat.unique_count > 50 {
                 continue;
             }
-            suggestions.push(make_view(ViewType::CountBar, None, Some(&cat.name), Aggregate::Count));
+            suggestions.push(make_view(ViewType::CountBar, None, Some(&cat.name), Aggregate::Count, false));
         }
     }
 
     // 6. Scatter plot (first two numerics)
     if numerics.len() >= 2 {
+        let title = humanize_title(&ViewType::ScatterPlot, None, None, Some(&numerics[0].name), Some(&numerics[1].name), false);
         suggestions.push(ViewSuggestion {
             view_type: ViewType::ScatterPlot,
+            title,
             metric: None,
             group_by: None,
             aggregate: Aggregate::Sum,
@@ -156,7 +222,7 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
     if let Some(temp) = temporal {
         if let Some(num) = primary_metric {
             let agg = default_aggregate(num);
-            suggestions.push(make_bar_chart(&num.name, &temp.name, agg));
+            suggestions.push(make_bar_chart(&num.name, &temp.name, agg, is_temporal(&temp.name)));
         }
     }
 
@@ -167,7 +233,7 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
         if cat.unique_count > 20 && cat.unique_count <= 50 {
             if let Some(num) = primary_metric {
                 let agg = default_aggregate(num);
-                suggestions.push(make_bar_chart(&num.name, &cat.name, agg));
+                suggestions.push(make_bar_chart(&num.name, &cat.name, agg, false));
             }
         }
     }
@@ -176,14 +242,14 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
 
     // Histogram for each numeric
     for num in &numerics {
-        suggestions.push(make_view(ViewType::Histogram, Some(&num.name), None, Aggregate::Count));
+        suggestions.push(make_view(ViewType::Histogram, Some(&num.name), None, Aggregate::Count, false));
     }
 
     // Summary cards for non-primary numerics
     for num in &numerics {
         if primary_metric.map(|p| p.name != num.name).unwrap_or(true) {
             let agg = default_aggregate(num);
-            suggestions.push(make_view(ViewType::SummaryCard, Some(&num.name), None, agg));
+            suggestions.push(make_view(ViewType::SummaryCard, Some(&num.name), None, agg, false));
         }
     }
 
@@ -195,9 +261,11 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
     suggestions
 }
 
-fn make_view(view_type: ViewType, metric: Option<&str>, group_by: Option<&str>, aggregate: Aggregate) -> ViewSuggestion {
+fn make_view(view_type: ViewType, metric: Option<&str>, group_by: Option<&str>, aggregate: Aggregate, is_temporal_group: bool) -> ViewSuggestion {
+    let title = humanize_title(&view_type, metric, group_by, None, None, is_temporal_group);
     ViewSuggestion {
         view_type,
+        title,
         metric: metric.map(|s| s.to_string()),
         group_by: group_by.map(|s| s.to_string()),
         aggregate,
@@ -209,9 +277,11 @@ fn make_view(view_type: ViewType, metric: Option<&str>, group_by: Option<&str>, 
     }
 }
 
-fn make_bar_chart(metric: &str, group_by: &str, aggregate: Aggregate) -> ViewSuggestion {
+fn make_bar_chart(metric: &str, group_by: &str, aggregate: Aggregate, is_temporal_group: bool) -> ViewSuggestion {
+    let title = humanize_title(&ViewType::BarChart, Some(metric), Some(group_by), None, None, is_temporal_group);
     ViewSuggestion {
         view_type: ViewType::BarChart,
+        title,
         metric: Some(metric.to_string()),
         group_by: Some(group_by.to_string()),
         aggregate,
@@ -223,9 +293,11 @@ fn make_bar_chart(metric: &str, group_by: &str, aggregate: Aggregate) -> ViewSug
     }
 }
 
-fn make_ranked_list(metric: &str, group_by: &str, aggregate: Aggregate) -> ViewSuggestion {
+fn make_ranked_list(metric: &str, group_by: &str, aggregate: Aggregate, is_temporal_group: bool) -> ViewSuggestion {
+    let title = humanize_title(&ViewType::RankedList, Some(metric), Some(group_by), None, None, is_temporal_group);
     ViewSuggestion {
         view_type: ViewType::RankedList,
+        title,
         metric: Some(metric.to_string()),
         group_by: Some(group_by.to_string()),
         aggregate,
@@ -345,5 +417,70 @@ mod tests {
             s.group_by.as_deref() == Some("respondent_id") && s.view_type == ViewType::BarChart
         });
         assert!(!has_respondent_bar, "respondent_id should not get a bar_chart");
+    }
+
+    // --- Title generation tests ---
+
+    #[test]
+    fn test_title_revenue_over_time() {
+        let title = humanize_title(&ViewType::LineChart, Some("revenue"), Some("date"), None, None, true);
+        assert_eq!(title, "Revenue over time");
+    }
+
+    #[test]
+    fn test_title_revenue_by_product() {
+        let title = humanize_title(&ViewType::BarChart, Some("revenue"), Some("product"), None, None, false);
+        assert_eq!(title, "Revenue by product");
+    }
+
+    #[test]
+    fn test_title_revenue_by_region() {
+        let title = humanize_title(&ViewType::BarChart, Some("revenue"), Some("region"), None, None, false);
+        assert_eq!(title, "Revenue by region");
+    }
+
+    #[test]
+    fn test_title_summary_card() {
+        let title = humanize_title(&ViewType::SummaryCard, Some("revenue"), None, None, None, false);
+        assert_eq!(title, "Revenue");
+    }
+
+    #[test]
+    fn test_title_count_bar_breakdown() {
+        let title = humanize_title(&ViewType::CountBar, None, Some("product"), None, None, false);
+        assert_eq!(title, "Product breakdown");
+    }
+
+    #[test]
+    fn test_title_histogram() {
+        let title = humanize_title(&ViewType::Histogram, Some("revenue"), None, None, None, false);
+        assert_eq!(title, "Revenue distribution");
+    }
+
+    #[test]
+    fn test_title_scatter_plot() {
+        let title = humanize_title(&ViewType::ScatterPlot, None, None, Some("spend"), Some("revenue"), false);
+        assert_eq!(title, "Spend vs Revenue");
+    }
+
+    #[test]
+    fn test_title_underscore_column() {
+        let title = humanize_title(&ViewType::BarChart, Some("total_spend"), Some("customer_type"), None, None, false);
+        assert_eq!(title, "Total spend by customer type");
+    }
+
+    #[test]
+    fn test_shopify_titles() {
+        let metas = classify_file("shopify.csv");
+        let suggestions = suggest_views(&metas);
+
+        let line = suggestions.iter().find(|s| s.view_type == ViewType::LineChart).unwrap();
+        assert_eq!(line.title, "Revenue over time");
+
+        let bar = suggestions.iter().find(|s| s.view_type == ViewType::BarChart && s.group_by.as_deref() == Some("product")).unwrap();
+        assert_eq!(bar.title, "Revenue by product");
+
+        let summary = suggestions.iter().find(|s| s.view_type == ViewType::SummaryCard && s.metric.as_deref() == Some("revenue")).unwrap();
+        assert_eq!(summary.title, "Revenue");
     }
 }

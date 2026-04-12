@@ -34,6 +34,7 @@ export type Aggregate = "Sum" | "Avg" | "Count" | "Min" | "Max";
 
 export interface ViewSuggestion {
   view_type: ViewType;
+  title: string;
   metric: string | null;
   group_by: string | null;
   aggregate: Aggregate;
