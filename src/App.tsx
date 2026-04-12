@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
@@ -17,14 +17,24 @@ function App() {
   const [prose, setProse] = useState("<p>Write your analysis here...</p>");
   const [sourcePath, setSourcePath] = useState<string>("");
   const [visibleViews, setVisibleViews] = useState<ViewSuggestion[]>([]);
+  // Ref to pass saved views from .lede file to the data-load useEffect
+  const ledeViewsRef = useRef<ViewSuggestion[] | null>(null);
 
   // Progressive rendering: show views one at a time
   useEffect(() => {
     if (!data) return;
+
+    // If loading from a .lede file, use saved views instead of auto-generated
+    if (ledeViewsRef.current) {
+      setVisibleViews(ledeViewsRef.current);
+      ledeViewsRef.current = null;
+      return;
+    }
+
     setVisibleViews([]);
-    const suggestions = data.suggestions;
-    const summaryCards = suggestions.filter((s) => s.view_type === "SummaryCard");
-    const others = suggestions.filter((s) => s.view_type !== "SummaryCard");
+    const defaults = data.suggestions.filter((s) => s.shown_by_default);
+    const summaryCards = defaults.filter((s) => s.view_type === "SummaryCard");
+    const others = defaults.filter((s) => s.view_type !== "SummaryCard");
     const ordered = [...summaryCards, ...others];
 
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -82,6 +92,11 @@ function App() {
       const doc = parseLede(content);
       setProse(doc.prose || "<p>Write your analysis here...</p>");
 
+      // Stage saved views so the useEffect picks them up when data arrives
+      if (doc.views.length > 0) {
+        ledeViewsRef.current = doc.views;
+      }
+
       // If there are source files, try to load the first one
       if (doc.sources.length > 0) {
         const csvPath = doc.sources[0];
@@ -103,11 +118,6 @@ function App() {
             setError(`Could not load source CSV: ${csvPath}`);
           }
         }
-      }
-
-      // Override suggestions with saved views if present
-      if (doc.views.length > 0 && data) {
-        setVisibleViews(doc.views);
       }
     } catch (e) {
       setError(String(e));
@@ -210,6 +220,14 @@ function App() {
     );
   }
 
+  const handleSwapView = (index: number, newView: ViewSuggestion) => {
+    setVisibleViews((prev) => {
+      const updated = [...prev];
+      updated[index] = newView;
+      return updated;
+    });
+  };
+
   const summaryCards = visibleViews.filter((v) => v.view_type === "SummaryCard");
   const charts = visibleViews.filter(
     (v) => v.view_type !== "SummaryCard" && v.view_type !== "Table"
@@ -242,9 +260,25 @@ function App() {
           )}
 
           <div className="charts-grid">
-            {charts.map((s, i) => (
-              <ChartView key={i} data={data} suggestion={s} />
-            ))}
+            {charts.map((s) => {
+              const viewIndex = visibleViews.indexOf(s);
+              const alternatives = data.suggestions.filter(
+                (alt) =>
+                  alt.view_type !== s.view_type &&
+                  alt.metric === s.metric &&
+                  alt.group_by === s.group_by &&
+                  alt.view_type !== "SummaryCard"
+              );
+              return (
+                <ChartView
+                  key={`${viewIndex}-${s.view_type}`}
+                  data={data}
+                  suggestion={s}
+                  alternatives={alternatives}
+                  onSwap={(alt) => handleSwapView(viewIndex, alt)}
+                />
+              );
+            })}
           </div>
 
           <DataTable data={data} />

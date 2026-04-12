@@ -125,6 +125,13 @@ fn run_view_query(path: String, view_config: ViewConfig) -> ViewResult
 - Tests must pass before any feature is considered complete
 - Run `cargo test` after every Rust change
 
+## Verification Rules
+
+You cannot reliably verify GUI output. For any step requiring 
+visual confirmation, list exactly what the user should check 
+and what correct behavior looks like. Never mark a UI step 
+complete based on compilation or test results alone.
+
 ## UI Decisions
 
 Make all UI decisions independently. Do not ask for approval on visual choices. Pick an aesthetic that is minimal, calm, and focused — this is a thinking tool, not a dashboard. Use muted colors, generous whitespace, a good monospace font for data, a readable serif or sans for prose.
