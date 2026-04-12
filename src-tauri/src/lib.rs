@@ -2,7 +2,7 @@ pub mod classifier;
 pub mod commands;
 pub mod suggester;
 
-use commands::parse_csv;
+use commands::{parse_csv, get_recent_files, add_recent_file};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,7 +10,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .invoke_handler(tauri::generate_handler![parse_csv])
+        .invoke_handler(tauri::generate_handler![parse_csv, get_recent_files, add_recent_file])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

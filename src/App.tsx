@@ -7,6 +7,7 @@ import SummaryCard from "./components/SummaryCard";
 import ChartView from "./components/ChartView";
 import DataTable from "./components/DataTable";
 import ProseEditor from "./components/ProseEditor";
+import HomeScreen from "./components/HomeScreen";
 import { serializeLede, parseLede, LedeDocument } from "./ledeFile";
 import "./App.css";
 
@@ -79,6 +80,8 @@ function App() {
       setData(result);
       setSourcePath(path);
       setProse("<p>Write your analysis here...</p>");
+      const title = path.split("/").pop()?.replace(".csv", "") || "Untitled";
+      invoke("add_recent_file", { path, title }).catch(() => {});
     } catch (e) {
       setError(String(e));
     } finally {
@@ -91,6 +94,8 @@ function App() {
       const content = await readTextFile(path);
       const doc = parseLede(content);
       setProse(doc.prose || "<p>Write your analysis here...</p>");
+      const title = doc.title || path.split("/").pop()?.replace(".lede", "") || "Untitled";
+      invoke("add_recent_file", { path, title }).catch(() => {});
 
       // Stage saved views so the useEffect picks them up when data arrives
       if (doc.views.length > 0) {
@@ -159,6 +164,7 @@ function App() {
       });
       if (savePath) {
         await writeTextFile(savePath, content);
+        invoke("add_recent_file", { path: savePath, title: filename }).catch(() => {});
       }
     } catch (e) {
       setError(String(e));
@@ -198,25 +204,18 @@ function App() {
 
   if (!data) {
     return (
-      <main className="app">
-        <div
-          className={`drop-zone ${loading ? "loading" : ""}`}
-          onClick={handleFilePick}
-        >
-          <div className="drop-zone-content">
-            <h1>Lede</h1>
-            <p className="tagline">Don't bury the lede in your data.</p>
-            {loading ? (
-              <p className="drop-hint">Loading...</p>
-            ) : (
-              <p className="drop-hint">
-                Drop a CSV file here, or click to browse
-              </p>
-            )}
-            {error && <p className="error">{error}</p>}
-          </div>
-        </div>
-      </main>
+      <HomeScreen
+        onOpenFile={(path) => {
+          if (path.endsWith(".lede")) {
+            loadLedeFile(path);
+          } else {
+            loadCSV(path);
+          }
+        }}
+        onNewNotebook={handleFilePick}
+        loading={loading}
+        error={error}
+      />
     );
   }
 
