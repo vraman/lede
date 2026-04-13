@@ -3,6 +3,7 @@ import * as Plot from "@observablehq/plot";
 import * as topojson from "topojson-client";
 import type { Topology } from "topojson-specification";
 import { ParsedCSV, ViewSuggestion } from "../types";
+import { query as duckQuery, isLoaded as isDuckLoaded } from "../duckdb";
 import { useDataContext } from "../DataContext";
 
 interface Props {
@@ -195,22 +196,50 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
 
   useEffect(() => {
     if (!containerRef.current) return;
+    let cancelled = false;
 
-    const rows = buildRows(data);
-    let chart: SVGSVGElement | HTMLElement | undefined;
+    /** Query DuckDB for aggregated data, fall back to sample rows. */
+    async function queryAgg(
+      groupBy: string,
+      metric: string,
+      aggType: string,
+      limit?: number | null,
+    ): Promise<Record<string, string | number>[]> {
+      if (isDuckLoaded()) {
+        const aggFn = aggType === "Avg" ? "AVG" : aggType === "Count" ? "COUNT" : aggType === "Min" ? "MIN" : aggType === "Max" ? "MAX" : "SUM";
+        const limitClause = limit ? `LIMIT ${limit}` : "";
+        const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
+        const rows = await duckQuery(sql);
+        return rows as Record<string, string | number>[];
+      }
+      // Fallback to sample rows
+      const rows = buildRows(data);
+      let agg = aggregate(rows, groupBy, metric, aggType);
+      agg.sort((a, b) => Number(b[metric]) - Number(a[metric]));
+      if (limit) agg = agg.slice(0, limit);
+      return agg;
+    }
 
-    try {
-      switch (suggestion.view_type) {
-        case "BarChart": {
-          const groupBy = suggestion.group_by!;
-          const metric = suggestion.metric!;
-          let agg = aggregate(rows, groupBy, metric, suggestion.aggregate);
-          if (suggestion.sort === "desc") {
-            agg.sort((a, b) => Number(b[metric]) - Number(a[metric]));
-          }
-          if (suggestion.limit) {
-            agg = agg.slice(0, suggestion.limit);
-          }
+    async function queryCount(groupBy: string): Promise<Record<string, string | number>[]> {
+      if (isDuckLoaded()) {
+        const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv GROUP BY "${groupBy}" ORDER BY count DESC`;
+        return await duckQuery(sql) as Record<string, string | number>[];
+      }
+      return countByGroup(buildRows(data), groupBy);
+    }
+
+    async function renderChart() {
+      if (!containerRef.current || cancelled) return;
+
+      const rows = buildRows(data);
+      let chart: SVGSVGElement | HTMLElement | undefined;
+
+      try {
+        switch (suggestion.view_type) {
+          case "BarChart": {
+            const groupBy = suggestion.group_by!;
+            const metric = suggestion.metric!;
+            const agg = await queryAgg(groupBy, metric, suggestion.aggregate, suggestion.limit);
           const barHeight = Math.max(200, agg.length * 24);
           chart = Plot.plot({
             height: barHeight,
@@ -233,7 +262,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
         case "LineChart": {
           const groupBy = suggestion.group_by!;
           const metric = suggestion.metric!;
-          const agg = aggregate(rows, groupBy, metric, suggestion.aggregate);
+          const agg = await queryAgg(groupBy, metric, suggestion.aggregate);
           // Check if groupBy column is Temporal
           const groupCol = data.columns.find((c) => c.name === groupBy);
           const isTemporal = groupCol?.col_type === "Temporal";
@@ -332,7 +361,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
         case "CountBar":
         case "OrderedBar": {
           const groupBy = suggestion.group_by!;
-          const counted = countByGroup(rows, groupBy);
+          const counted = await queryCount(groupBy);
           const domain = ORDINAL_ORDERS[groupBy];
           chart = Plot.plot({
             height: 200,
@@ -389,7 +418,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
           const metric = suggestion.metric;
           if (!geoCol || !metric) break;
 
-          const agg = aggregate(rows, geoCol, metric, suggestion.aggregate);
+          const agg = await queryAgg(geoCol, metric, suggestion.aggregate);
           const lookup = new Map<string, number>();
           for (const row of agg) {
             lookup.set(normalizeGeoName(String(row[geoCol])), Number(row[metric]));
@@ -442,12 +471,16 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
       console.error("Chart render error:", e);
     }
 
-    if (chart) {
+    if (chart && !cancelled && containerRef.current) {
       containerRef.current.innerHTML = "";
       containerRef.current.appendChild(chart);
     }
+    } // end renderChart
+
+    renderChart();
 
     return () => {
+      cancelled = true;
       if (containerRef.current) {
         containerRef.current.innerHTML = "";
       }

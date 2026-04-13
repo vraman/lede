@@ -9,6 +9,8 @@ import { DataContext } from "./DataContext";
 import ProseEditor from "./components/ProseEditor";
 import DataTable from "./components/DataTable";
 import HomeScreen from "./components/HomeScreen";
+import AiOptIn, { isAiEnabled } from "./components/AiOptIn";
+import { loadCSV as loadDuckDB } from "./duckdb";
 import {
   serializeFromEditor,
   parseToEditorJSON,
@@ -116,6 +118,7 @@ function App() {
   const metaRef = useRef<LedeMeta | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(isAiEnabled());
   const [allSuggestions, setAllSuggestions] = useState<ViewSuggestion[]>([]);
 
   const handleFilePick = useCallback(async () => {
@@ -155,8 +158,13 @@ function App() {
       setSavePath("");
       invoke("add_recent_file", { path, title: name }).catch(() => {});
 
-      // Phase 2: Request AI insights asynchronously
-      requestAiInsights(path);
+      // Load CSV into DuckDB for full-dataset aggregation
+      loadDuckDB(path).catch(() => {});
+
+      // Phase 2: Request AI insights asynchronously (only if enabled)
+      if (aiEnabled) {
+        requestAiInsights(path);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -503,6 +511,12 @@ function App() {
               editorInstanceRef.current = editor;
             }}
           />
+          {!aiEnabled && (
+            <AiOptIn onEnabled={() => {
+              setAiEnabled(true);
+              if (sourcePath) requestAiInsights(sourcePath);
+            }} />
+          )}
           <DataTable data={data} />
         </div>
       </main>
