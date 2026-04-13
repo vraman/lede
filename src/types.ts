@@ -80,4 +80,5 @@ export interface AiViewSuggestion {
 export interface AiInsightsResponse {
   suggested_views: AiViewSuggestion[];
   insights: string[];
+  suggested_title: string | null;
 }

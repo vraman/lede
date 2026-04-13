@@ -263,6 +263,13 @@ function App() {
             .run();
         }
       }
+      // Auto-set document title if still the filename default
+      if (response.suggested_title) {
+        const currentIsDefault = docTitle === sourcePath.split("/").pop()?.replace(".csv", "");
+        if (currentIsDefault) {
+          setDocTitle(response.suggested_title);
+        }
+      }
     } catch (e) {
       console.error("[ai] generate_ai_insights failed:", e);
     } finally {

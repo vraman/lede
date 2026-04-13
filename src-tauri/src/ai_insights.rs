@@ -26,6 +26,8 @@ pub struct AiInsightsResponse {
     pub suggested_views: Vec<AiViewSuggestion>,
     #[serde(default)]
     pub insights: Vec<String>,
+    #[serde(default)]
+    pub suggested_title: Option<String>,
 }
 
 /// Internal response parsed from the model — insights may be structured.
@@ -35,6 +37,8 @@ struct RawAiResponse {
     suggested_views: Vec<AiViewSuggestion>,
     #[serde(default)]
     insights: Vec<RawInsight>,
+    #[serde(default)]
+    suggested_title: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -485,8 +489,9 @@ pub fn build_prompt(context: &CsvContext) -> String {
     prompt.push_str("- distribution: {metric} → \"Y ranges from A to B\"\n");
     prompt.push_str("- concentration: {metric, group_by, aggregate, n} → \"Top N account for P%\"\n");
     prompt.push_str("- count: {column} → \"N unique values\"\n\n");
+    prompt.push_str("Also include a suggested_title: a short, descriptive notebook title (3-6 words) based on the dataset content.\n\n");
     prompt.push_str("Respond with ONLY valid JSON. Example:\n");
-    prompt.push_str(r#"{"suggested_views":[{"view_type":"BoxPlot","title":"Revenue spread by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight_kind":"compare_two","insight_params":{"metric":"revenue","group_by":"product","aggregate":"Sum"}}],"insights":[{"kind":"concentration","params":{"metric":"revenue","group_by":"product","aggregate":"Sum","n":3}}]}"#);
+    prompt.push_str(r#"{"suggested_title":"Product Revenue Analysis","suggested_views":[{"view_type":"BoxPlot","title":"Revenue spread by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight_kind":"compare_two","insight_params":{"metric":"revenue","group_by":"product","aggregate":"Sum"}}],"insights":[{"kind":"concentration","params":{"metric":"revenue","group_by":"product","aggregate":"Sum","n":3}}]}"#);
     prompt.push_str("\n\nONLY use column names from the dataset.\n");
     prompt.push_str("<end_of_turn>\n<start_of_turn>model\n");
 
@@ -569,6 +574,7 @@ pub fn parse_ai_response(raw: &str, columns: &[ColumnMeta]) -> Result<AiInsights
     let mut response = AiInsightsResponse {
         suggested_views: raw_response.suggested_views,
         insights,
+        suggested_title: raw_response.suggested_title,
     };
 
     response.suggested_views.retain(|s| validate_ai_suggestion(s, columns));
