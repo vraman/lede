@@ -1,8 +1,12 @@
 use crate::classifier::{classify_column, ColumnMeta};
 use crate::suggester::{suggest_views, ViewSuggestion};
+use duckdb::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::Manager;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedCSV {
@@ -120,6 +124,71 @@ pub fn add_recent_file(app: tauri::AppHandle, path: String, title: String) -> Re
     let content = serde_json::to_string_pretty(&recents).map_err(|e| e.to_string())?;
     std::fs::write(&file_path, content).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Managed DuckDB connection state.
+pub type DuckDbState = Arc<Mutex<Connection>>;
+
+/// Create a new in-memory DuckDB connection.
+pub fn create_duckdb() -> Connection {
+    Connection::open_in_memory().expect("Failed to create DuckDB connection")
+}
+
+#[tauri::command]
+pub async fn load_csv_into_duckdb(path: String, app: tauri::AppHandle) -> Result<(), String> {
+    let db = app.state::<DuckDbState>();
+    let conn = db.lock().await;
+    conn.execute("DROP TABLE IF EXISTS csv", [])
+        .map_err(|e| format!("Failed to drop table: {}", e))?;
+    conn.execute(
+        &format!("CREATE TABLE csv AS SELECT * FROM read_csv_auto('{}', ignore_errors=true)", path.replace('\'', "''")),
+        [],
+    )
+    .map_err(|e| format!("Failed to load CSV into DuckDB: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn query_duckdb(
+    sql: String,
+    app: tauri::AppHandle,
+) -> Result<Vec<HashMap<String, serde_json::Value>>, String> {
+    let db = app.state::<DuckDbState>();
+    let conn = db.lock().await;
+    let mut stmt = conn.prepare(&sql).map_err(|e| format!("SQL error: {}", e))?;
+    let column_count = stmt.column_count();
+    let column_names: Vec<String> = (0..column_count)
+        .map(|i| stmt.column_name(i).map_or("?".to_string(), |v| v.to_string()))
+        .collect();
+
+    let rows = stmt
+        .query_map([], |row| {
+            let mut map = HashMap::new();
+            for (i, name) in column_names.iter().enumerate() {
+                let val: duckdb::types::Value = row.get(i)?;
+                let json_val = match val {
+                    duckdb::types::Value::Null => serde_json::Value::Null,
+                    duckdb::types::Value::Boolean(b) => serde_json::Value::Bool(b),
+                    duckdb::types::Value::TinyInt(n) => serde_json::json!(n),
+                    duckdb::types::Value::SmallInt(n) => serde_json::json!(n),
+                    duckdb::types::Value::Int(n) => serde_json::json!(n),
+                    duckdb::types::Value::BigInt(n) => serde_json::json!(n),
+                    duckdb::types::Value::Float(n) => serde_json::json!(n),
+                    duckdb::types::Value::Double(n) => serde_json::json!(n),
+                    duckdb::types::Value::Text(s) => serde_json::Value::String(s),
+                    _ => serde_json::Value::String(format!("{:?}", val)),
+                };
+                map.insert(name.clone(), json_val);
+            }
+            Ok(map)
+        })
+        .map_err(|e| format!("Query failed: {}", e))?;
+
+    let mut result = Vec::new();
+    for row in rows {
+        result.push(row.map_err(|e| format!("Row error: {}", e))?);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
