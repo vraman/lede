@@ -644,6 +644,24 @@ fn extract_json(raw: &str) -> String {
     }
 }
 
+/// Read all rows from a CSV file (up to max_rows) for accurate computation.
+fn read_all_rows(path: &str, max_rows: usize) -> Result<Vec<Vec<String>>, String> {
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_path(path)
+        .map_err(|e| format!("Failed to open CSV: {}", e))?;
+
+    let mut rows = Vec::new();
+    for result in rdr.records() {
+        let record = result.map_err(|e| format!("Failed to read record: {}", e))?;
+        rows.push(record.iter().map(|f| f.to_string()).collect());
+        if rows.len() >= max_rows {
+            break;
+        }
+    }
+    Ok(rows)
+}
+
 #[tauri::command]
 pub async fn generate_ai_insights(
     path: String,
@@ -679,7 +697,10 @@ pub async fn generate_ai_insights(
     // Parse CSV to get context
     let parsed = crate::commands::parse_csv(path.clone())?;
 
-    let summaries = compute_summaries(&parsed.columns, &parsed.sample_rows);
+    // Read all rows for accurate insight computation (up to 50K)
+    let all_rows = read_all_rows(&path, 50_000)?;
+
+    let summaries = compute_summaries(&parsed.columns, &all_rows);
 
     let context = CsvContext {
         filename: path
@@ -690,7 +711,7 @@ pub async fn generate_ai_insights(
         row_count: parsed.row_count,
         columns: parsed.columns.clone(),
         summaries,
-        sample_rows: parsed.sample_rows.clone(),
+        sample_rows: all_rows,
         current_views: parsed
             .suggestions
             .iter()

@@ -11,6 +11,7 @@ export interface LedeMeta {
 export function serializeFromEditor(meta: LedeMeta, editorJSON: JSONContent): string {
   const lines: string[] = [];
   lines.push("---");
+  lines.push("version: 1");
   lines.push(`title: ${meta.title}`);
   lines.push(`created: ${meta.created}`);
   lines.push("sources:");

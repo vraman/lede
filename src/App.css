@@ -826,3 +826,57 @@ tr:hover td {
   min-width: 2.5rem;
   text-align: right;
 }
+
+/* AI opt-in card */
+.ai-optin-card {
+  max-width: 680px;
+  margin: 1.5rem auto;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.ai-optin-header {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.5rem;
+}
+
+.ai-optin-text {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  margin: 0 0 0.75rem 0;
+}
+
+.ai-optin-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.ai-optin-enable {
+  padding: 0.4rem 1rem;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.ai-optin-dismiss {
+  padding: 0.4rem 1rem;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.ai-optin-error {
+  font-size: 0.8rem;
+  color: #b91c1c;
+  margin-top: 0.5rem;
+}

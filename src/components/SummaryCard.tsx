@@ -1,4 +1,6 @@
+import { useState, useEffect } from "react";
 import { ParsedCSV, ViewSuggestion } from "../types";
+import { query as duckQuery, isLoaded as isDuckLoaded } from "../duckdb";
 
 interface Props {
   data: ParsedCSV;
@@ -7,46 +9,75 @@ interface Props {
 
 export default function SummaryCard({ data, suggestion }: Props) {
   const metric = suggestion.metric;
-  if (!metric) return null;
+  const [computedValue, setComputedValue] = useState<number | null>(null);
 
-  const colIndex = data.columns.findIndex((c) => c.name === metric);
-  if (colIndex === -1) return null;
+  useEffect(() => {
+    if (!metric) return;
 
-  const values = data.sample_rows.map((row) => parseFloat(row[colIndex])).filter((n) => !isNaN(n));
+    async function compute() {
+      if (isDuckLoaded()) {
+        try {
+          let sql: string;
+          if (suggestion.denominator) {
+            sql = `SELECT SUM("${metric}") / NULLIF(SUM("${suggestion.denominator}"), 0) as val FROM csv`;
+          } else {
+            const fn = suggestion.aggregate === "Avg" ? "AVG"
+              : suggestion.aggregate === "Min" ? "MIN"
+              : suggestion.aggregate === "Max" ? "MAX"
+              : suggestion.aggregate === "Count" ? "COUNT"
+              : "SUM";
+            sql = `SELECT ${fn}("${metric}") as val FROM csv`;
+          }
+          const rows = await duckQuery(sql);
+          if (rows.length > 0 && rows[0].val != null) {
+            setComputedValue(Number(rows[0].val));
+          }
+          return;
+        } catch {
+          // Fall through to sample-based computation
+        }
+      }
 
-  if (values.length === 0) return null;
+      // Fallback: compute from sample rows
+      const colIndex = data.columns.findIndex((c) => c.name === metric);
+      if (colIndex === -1) return;
+      const values = data.sample_rows.map((row) => parseFloat(row[colIndex])).filter((n) => !isNaN(n));
+      if (values.length === 0) return;
 
-  let value: number;
-  let label: string;
+      const numerator = values.reduce((a, b) => a + b, 0);
+      let val: number;
 
-  const numerator = values.reduce((a, b) => a + b, 0);
-
-  if (suggestion.denominator) {
-    // Ratio: Sum(metric) / Sum(denominator)
-    const denomIndex = data.columns.findIndex((c) => c.name === suggestion.denominator);
-    if (denomIndex !== -1) {
-      const denomValues = data.sample_rows.map((row) => parseFloat(row[denomIndex])).filter((n) => !isNaN(n));
-      const denomSum = denomValues.reduce((a, b) => a + b, 0);
-      value = denomSum > 0 ? numerator / denomSum : 0;
-    } else {
-      value = numerator;
+      if (suggestion.denominator) {
+        const denomIndex = data.columns.findIndex((c) => c.name === suggestion.denominator);
+        if (denomIndex !== -1) {
+          const denomValues = data.sample_rows.map((row) => parseFloat(row[denomIndex])).filter((n) => !isNaN(n));
+          const denomSum = denomValues.reduce((a, b) => a + b, 0);
+          val = denomSum > 0 ? numerator / denomSum : 0;
+        } else {
+          val = numerator;
+        }
+      } else if (suggestion.aggregate === "Avg") {
+        val = numerator / values.length;
+      } else if (suggestion.aggregate === "Min") {
+        val = Math.min(...values);
+      } else if (suggestion.aggregate === "Max") {
+        val = Math.max(...values);
+      } else if (suggestion.aggregate === "Count") {
+        val = values.length;
+      } else {
+        val = numerator;
+      }
+      setComputedValue(val);
     }
-  } else if (suggestion.aggregate === "Avg") {
-    value = numerator / values.length;
-  } else if (suggestion.aggregate === "Min") {
-    value = Math.min(...values);
-  } else if (suggestion.aggregate === "Max") {
-    value = Math.max(...values);
-  } else if (suggestion.aggregate === "Count") {
-    value = values.length;
-  } else {
-    value = numerator;
-  }
 
-  label = suggestion.title || `${suggestion.aggregate === "Avg" ? "Avg" : "Total"} ${metric}`;
+    compute();
+  }, [data, suggestion, metric]);
 
-  // Format with commas and 2 decimal places
-  const formatted = value.toLocaleString(undefined, {
+  if (!metric || computedValue === null) return null;
+
+  const label = suggestion.title || `${suggestion.aggregate === "Avg" ? "Avg" : "Total"} ${metric}`;
+
+  const formatted = computedValue.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
