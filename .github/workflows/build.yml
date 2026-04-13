@@ -1,0 +1,58 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
+
+      - name: Run Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Run frontend tests
+        run: npx vitest run
+
+      - name: Build app
+        run: cargo tauri build
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '11.0'
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: lede-macos-dmg
+          path: src-tauri/target/release/bundle/dmg/*.dmg
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: lede-macos-app
+          path: src-tauri/target/release/bundle/macos/*.app
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src-tauri/target/release/bundle/dmg/*.dmg
+          draft: true
+          generate_release_notes: true
