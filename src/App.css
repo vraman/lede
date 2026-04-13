@@ -429,10 +429,17 @@ body {
   right: -2rem;
   display: flex;
   justify-content: space-between;
+  align-items: center;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s;
   z-index: 10;
+}
+
+.dataview-controls-right {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .dataview-wrapper:hover .dataview-controls {
@@ -667,4 +674,155 @@ tr:hover td {
   pointer-events: none;
   height: 0;
   font-style: italic;
+}
+
+/* AI Badge */
+.ai-badge {
+  pointer-events: auto;
+  font-size: 0.6rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 99px;
+  background: #ede9fe;
+  color: #7c3aed;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+/* AI Insight below view */
+.dataview-insight {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  border-top: 1px solid var(--border);
+  transition: background 0.1s;
+}
+
+.dataview-insight:hover {
+  background: #faf5ff;
+}
+
+.insight-badge {
+  font-size: 0.6rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 99px;
+  background: #ede9fe;
+  color: #7c3aed;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.insight-text {
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* Insight editing */
+.dataview-insight-edit {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.insight-input {
+  flex: 1;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--text);
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  outline: none;
+  font-family: var(--font-sans);
+  background: var(--surface);
+}
+
+.insight-save-btn,
+.insight-delete-btn {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: all 0.15s;
+}
+
+.insight-save-btn:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.insight-delete-btn:hover {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+/* AI Loading indicator in header */
+.ai-loading-indicator {
+  font-size: 0.75rem;
+  color: #7c3aed;
+  font-style: italic;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* Model download banner on HomeScreen */
+.model-download-banner {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  z-index: 100;
+}
+
+.model-download-text {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.model-download-bar {
+  width: 120px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.model-download-fill {
+  height: 100%;
+  background: #7c3aed;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.model-download-pct {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  min-width: 2.5rem;
+  text-align: right;
 }

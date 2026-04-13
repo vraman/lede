@@ -4,9 +4,10 @@ import { save, open } from "@tauri-apps/plugin-dialog";
 import { writeTextFile, readTextFile } from "@tauri-apps/plugin-fs";
 import { JSONContent } from "@tiptap/react";
 import { Editor } from "@tiptap/react";
-import { ParsedCSV, ViewSuggestion } from "./types";
+import { ParsedCSV, ViewSuggestion, AiInsightsResponse, AiViewSuggestion } from "./types";
 import { DataContext } from "./DataContext";
 import ProseEditor from "./components/ProseEditor";
+import DataTable from "./components/DataTable";
 import HomeScreen from "./components/HomeScreen";
 import {
   serializeFromEditor,
@@ -43,6 +44,62 @@ function buildInitialDoc(suggestions: ViewSuggestion[]): JSONContent {
   return { type: "doc", content: nodes };
 }
 
+const VALID_VIEW_TYPES = new Set<string>([
+  "Table", "SummaryCard", "LineChart", "BarChart", "CountBar",
+  "ScatterPlot", "Histogram", "Heatmap", "OrderedBar", "MultiLineChart",
+  "Choropleth",
+]);
+
+const VALID_AGGREGATES = new Set<string>(["Sum", "Avg", "Count", "Min", "Max"]);
+
+/** Map AI view_type strings (which may be wrong) to valid ViewType values. */
+function normalizeViewType(raw: string): ViewSuggestion["view_type"] {
+  if (VALID_VIEW_TYPES.has(raw)) return raw as ViewSuggestion["view_type"];
+  // Common AI mistakes
+  const lower = raw.toLowerCase().replace(/[\s_-]/g, "");
+  const map: Record<string, ViewSuggestion["view_type"]> = {
+    barchart: "BarChart",
+    linechart: "LineChart",
+    scatterplot: "ScatterPlot",
+    histogram: "Histogram",
+    boxplot: "BoxPlot",
+    piechart: "BarChart",
+    heatmap: "Heatmap",
+    table: "Table",
+    summarycard: "SummaryCard",
+    countbar: "CountBar",
+    orderedbar: "OrderedBar",
+    rankedlist: "BarChart",
+    multilinechart: "MultiLineChart",
+    choropleth: "Choropleth",
+  };
+  return map[lower] || "BarChart";
+}
+
+/** Convert an AI view suggestion to a full ViewSuggestion.
+ *  The AI now provides the correct fields per view type (validated in Rust).
+ *  This function only adds frontend metadata. */
+function aiViewToSuggestion(aiView: AiViewSuggestion): ViewSuggestion {
+  return {
+    view_type: normalizeViewType(aiView.view_type),
+    title: aiView.title,
+    metric: aiView.metric ?? null,
+    group_by: aiView.group_by ?? null,
+    aggregate: VALID_AGGREGATES.has(aiView.aggregate || "")
+      ? (aiView.aggregate as ViewSuggestion["aggregate"])
+      : "Sum",
+    sort: aiView.sort ?? null,
+    limit: aiView.limit ?? null,
+    x_col: aiView.x_col ?? null,
+    y_col: aiView.y_col ?? null,
+    shown_by_default: false,
+    suggested_by: "ai",
+    insight: aiView.insight ?? null,
+    insight_edited: false,
+    time_column: aiView.time_column ?? null,
+  };
+}
+
 function App() {
   const [data, setData] = useState<ParsedCSV | null>(null);
   const [loading, setLoading] = useState(false);
@@ -58,6 +115,9 @@ function App() {
   const editorInstanceRef = useRef<Editor | null>(null);
   const metaRef = useRef<LedeMeta | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
+  const [aiInsights, setAiInsights] = useState<AiInsightsResponse | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [allSuggestions, setAllSuggestions] = useState<ViewSuggestion[]>([]);
 
   const handleFilePick = useCallback(async () => {
     try {
@@ -84,6 +144,7 @@ function App() {
   const loadCSV = async (path: string) => {
     setLoading(true);
     setError(null);
+    setAiInsights(null);
     try {
       const result = await invoke<ParsedCSV>("parse_csv", { path });
       setData(result);
@@ -91,13 +152,128 @@ function App() {
       const name = path.split("/").pop()?.replace(".csv", "") || "Untitled";
       setDocTitle(name);
       setEditorContent(buildInitialDoc(result.suggestions));
+      setAllSuggestions(result.suggestions);
       metaRef.current = null;
       setSavePath("");
       invoke("add_recent_file", { path, title: name }).catch(() => {});
+
+      // Phase 2: Request AI insights asynchronously
+      requestAiInsights(path);
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
+    }
+  };
+
+  /** Phase 2: Request AI insights and merge into editor. */
+  const requestAiInsights = async (csvPath: string) => {
+    setAiLoading(true);
+    console.log("[ai] requesting insights for", csvPath);
+    try {
+      const response = await invoke<AiInsightsResponse>("generate_ai_insights", {
+        path: csvPath,
+      });
+      console.log("[ai] got response:", response);
+      setAiInsights(response);
+
+      // Split AI views into alternatives (same metric+group_by) vs novel (new cards)
+      const editor = editorInstanceRef.current;
+      if (editor && response.suggested_views.length > 0) {
+        // Collect existing metric+group_by combos from Phase 1
+        const existingCombos = new Set<string>();
+        const existingKeys = new Set<string>();
+        editor.state.doc.descendants((node) => {
+          if (node.type.name === "dataview") {
+            const vc = node.attrs.viewConfig;
+            if (vc) {
+              existingCombos.add(`${vc.metric || ""}|${vc.group_by || ""}`);
+              existingKeys.add(`${vc.metric || ""}|${vc.group_by || ""}|${vc.view_type}`);
+            }
+          }
+        });
+
+        const novelNodes: JSONContent[] = [];
+        const newAlternatives: ViewSuggestion[] = [];
+
+        for (const aiView of response.suggested_views) {
+          const viewConfig = aiViewToSuggestion(aiView);
+          const combo = `${viewConfig.metric || ""}|${viewConfig.group_by || ""}`;
+          const key = `${combo}|${viewConfig.view_type}`;
+
+          if (existingKeys.has(key)) {
+            // Exact duplicate — skip entirely
+            continue;
+          } else if (existingCombos.has(combo)) {
+            // Same metric+group_by, different view_type — add as alternative toggle
+            newAlternatives.push(viewConfig);
+          } else {
+            // Genuinely new combo — insert as new card
+            novelNodes.push({ type: "paragraph" });
+            novelNodes.push({ type: "dataview", attrs: { viewConfig } });
+          }
+        }
+
+        // Merge new alternatives into suggestions so switcher chips pick them up,
+        // and swap existing Phase 1 views to the AI-suggested view type
+        if (newAlternatives.length > 0) {
+          setAllSuggestions((prev) => [...prev, ...newAlternatives]);
+
+          // Build lookup: metric+group_by → AI viewConfig
+          const aiSwapMap = new Map<string, ViewSuggestion>();
+          for (const alt of newAlternatives) {
+            const combo = `${alt.metric || ""}|${alt.group_by || ""}`;
+            aiSwapMap.set(combo, alt);
+          }
+
+          // Walk editor nodes and swap matching Phase 1 views to AI view type
+          editor.state.doc.descendants((node, pos) => {
+            if (node.type.name === "dataview") {
+              const vc = node.attrs.viewConfig;
+              if (vc && vc.suggested_by !== "ai") {
+                const combo = `${vc.metric || ""}|${vc.group_by || ""}`;
+                const aiAlt = aiSwapMap.get(combo);
+                if (aiAlt) {
+                  // Swap to AI view type, keeping insight and AI badge
+                  const tr = editor.state.tr.setNodeAttribute(pos, "viewConfig", {
+                    ...aiAlt,
+                  });
+                  editor.view.dispatch(tr);
+                }
+              }
+            }
+          });
+        }
+
+        // Insert standalone insights
+        if (response.insights.length > 0) {
+          novelNodes.push({ type: "paragraph" });
+          novelNodes.push({
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                marks: [{ type: "italic" }],
+                text: response.insights.join(" \u2022 "),
+              },
+            ],
+          });
+        }
+
+        // Append novel views at end of document
+        if (novelNodes.length > 0) {
+          const endPos = editor.state.doc.content.size - 1;
+          editor
+            .chain()
+            .focus()
+            .insertContentAt(endPos, novelNodes)
+            .run();
+        }
+      }
+    } catch (e) {
+      console.error("[ai] generate_ai_insights failed:", e);
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -253,7 +429,7 @@ function App() {
   const sourceFilename = sourcePath.split("/").pop() || "";
 
   return (
-    <DataContext.Provider value={{ data, suggestions: data.suggestions, sourceFilename }}>
+    <DataContext.Provider value={{ data, suggestions: allSuggestions, sourceFilename, aiInsights, aiLoading }}>
       <main className="app workspace">
         <header className="app-header">
           {editingTitle ? (
@@ -276,6 +452,9 @@ function App() {
             </h1>
           )}
           <div className="header-actions">
+            {aiLoading && (
+              <span className="ai-loading-indicator">AI analyzing...</span>
+            )}
             {saveStatus === "saved" && (
               <span className="save-indicator">Saved</span>
             )}
@@ -298,6 +477,7 @@ function App() {
               editorInstanceRef.current = editor;
             }}
           />
+          <DataTable data={data} />
         </div>
       </main>
     </DataContext.Provider>

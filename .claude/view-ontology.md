@@ -151,7 +151,7 @@ Priority 1 — Always suggest:
 Priority 2 — Strong signal:
   → temporal + NumericMeasure       → line_chart (or multi_line_chart if 2+ measures)
   → categorical + NumericMeasure    → bar_chart (top pairing only)
-  → geographic + NumericMeasure     → bar_chart (choropleth future)
+  → geographic + NumericMeasure     → bar_chart (primary), choropleth (alternative)
 
 Priority 3 — Weaker signal:
   → no NumericMeasure exists        → count_bar by first Categorical

@@ -15,13 +15,13 @@ llama-cpp crate on crates.io — check before building).
 - Model loaded once at startup, reused across inference calls
 
 ## Model
-**Gemma 3 2B Instruct Q4_K_M**
-- Size: ~1.5GB on disk
-- RAM: works on 8GB
-- Speed: fast on Apple Silicon (M1/M2/M3)
-- Structured JSON output: supported
-- Source: Hugging Face — google/gemma-3-2b-it-GGUF
-- Stored at: `{app_data_dir}/lede/models/gemma-3-2b-instruct-q4_k_m.gguf`
+**Gemma 3 4B Instruct Q4_K_M**
+- Size: ~2.5GB on disk
+- RAM: works on 8GB (fits comfortably on M-series Air)
+- Speed: fast on Apple Silicon (M1/M2/M3/M4)
+- Structured JSON output: better instruction following than 2B
+- Source: Hugging Face — bartowski/google_gemma-3-4b-it-GGUF
+- Stored at: `{app_data_dir}/lede/models/gemma-3-4b-it-Q4_K_M.gguf`
 
 ## Two-Phase Rendering
 
