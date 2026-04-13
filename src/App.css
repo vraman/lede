@@ -880,3 +880,21 @@ tr:hover td {
   color: #b91c1c;
   margin-top: 0.5rem;
 }
+
+/* AI toggle in header */
+.btn-ai-toggle {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.btn-ai-toggle.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}

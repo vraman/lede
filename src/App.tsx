@@ -119,6 +119,7 @@ function App() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(isAiEnabled());
+  const aiCancelledRef = useRef(false);
   const [allSuggestions, setAllSuggestions] = useState<ViewSuggestion[]>([]);
 
   const handleFilePick = useCallback(async () => {
@@ -172,13 +173,48 @@ function App() {
     }
   };
 
+  const handleAiToggle = () => {
+    const next = !aiEnabled;
+    setAiEnabled(next);
+    localStorage.setItem("lede-ai-enabled", next ? "true" : "false");
+    if (!next) {
+      aiCancelledRef.current = true;
+      setAiLoading(false);
+      const editor = editorInstanceRef.current;
+      if (editor) {
+        const nodesToRemove: number[] = [];
+        editor.state.doc.descendants((node, pos) => {
+          if (node.type.name === "dataview") {
+            const vc = node.attrs.viewConfig;
+            if (vc && vc.suggested_by === "ai") {
+              nodesToRemove.push(pos);
+            }
+          }
+        });
+        let tr = editor.state.tr;
+        for (const pos of nodesToRemove.reverse()) {
+          const node = tr.doc.nodeAt(pos);
+          if (node) tr = tr.delete(pos, pos + node.nodeSize);
+        }
+        if (nodesToRemove.length > 0) editor.view.dispatch(tr);
+        setAllSuggestions((prev) => prev.filter((s) => s.suggested_by !== "ai"));
+      }
+    } else if (sourcePath) {
+      requestAiInsights(sourcePath);
+    }
+  };
+
   /** Phase 2: Request AI insights and merge into editor. */
   const requestAiInsights = async (csvPath: string) => {
+    aiCancelledRef.current = false;
     setAiLoading(true);
     try {
       const response = await invoke<AiInsightsResponse>("generate_ai_insights", {
         path: csvPath,
       });
+      // Discard results if AI was toggled off while inference was running
+      if (aiCancelledRef.current) return;
+
       // Split AI views into alternatives (same metric+group_by) vs novel (new cards)
       const editor = editorInstanceRef.current;
       if (editor && response.suggested_views.length > 0) {
@@ -497,6 +533,9 @@ function App() {
             </button>
             <button onClick={() => doSave()} className="btn-save">
               Save
+            </button>
+            <button className={`btn-ai-toggle ${aiEnabled ? "active" : ""}`} onClick={handleAiToggle}>
+              AI {aiEnabled ? "On" : "Off"}
             </button>
           </div>
         </header>
