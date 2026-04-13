@@ -54,9 +54,14 @@ export function serializeLede(doc: LedeDocument): string {
     if (view.group_by) lines.push(`group_by: ${view.group_by}`);
     if (view.sort) lines.push(`sort: ${view.sort}`);
     if (view.limit) lines.push(`limit: ${view.limit}`);
-    lines.push("suggested_by: rule");
+    lines.push(`suggested_by: ${view.suggested_by || "rule"}`);
     lines.push(`last_verified: ${doc.created}`);
-    lines.push("insight: null");
+    if (view.insight) {
+      lines.push(`insight: ${view.insight}`);
+    }
+    if (view.insight_edited) {
+      lines.push("insight_edited: true");
+    }
     lines.push("```");
     lines.push("");
   }
@@ -92,46 +97,7 @@ export function parseLede(content: string): LedeDocument {
   let match;
   while ((match = dataviewRegex.exec(body)) !== null) {
     const block = match[1];
-    const view: ViewSuggestion = {
-      view_type: "Table" as any,
-      title: "",
-      metric: null,
-      group_by: null,
-      aggregate: "Sum" as any,
-      sort: null,
-      limit: null,
-      x_col: null,
-      y_col: null,
-      shown_by_default: true,
-    };
-
-    const lines = block.split("\n");
-    for (const line of lines) {
-      const kv = line.match(/^(\w+):\s*(.+)$/);
-      if (!kv) continue;
-      const [, key, val] = kv;
-      switch (key) {
-        case "view":
-          view.view_type = stringToViewType(val.trim()) as any;
-          break;
-        case "metric":
-          view.metric = val.trim();
-          break;
-        case "aggregate":
-          view.aggregate = stringToAggregate(val.trim()) as any;
-          break;
-        case "group_by":
-          view.group_by = val.trim();
-          break;
-        case "sort":
-          view.sort = val.trim();
-          break;
-        case "limit":
-          view.limit = parseInt(val.trim(), 10) || null;
-          break;
-      }
-    }
-
+    const view = parseDataviewBlock(block);
     doc.views.push(view);
   }
 
@@ -177,6 +143,16 @@ export function serializeFromEditor(meta: LedeMeta, editorJSON: JSONContent): st
       if (vc.limit) lines.push(`limit: ${vc.limit}`);
       if (vc.x_col) lines.push(`x_col: ${vc.x_col}`);
       if (vc.y_col) lines.push(`y_col: ${vc.y_col}`);
+      lines.push(`suggested_by: ${vc.suggested_by || "rule"}`);
+      if (vc.insight) {
+        lines.push(`insight: ${vc.insight}`);
+      }
+      if (vc.insight_edited) {
+        lines.push("insight_edited: true");
+      }
+      if (vc.time_column) {
+        lines.push(`time_column: ${vc.time_column}`);
+      }
       lines.push("```");
       lines.push("");
     } else if (node.type === "heading") {
@@ -314,6 +290,10 @@ function parseDataviewBlock(block: string): ViewSuggestion {
     x_col: null,
     y_col: null,
     shown_by_default: true,
+    suggested_by: "rule",
+    insight: null,
+    insight_edited: false,
+    time_column: null,
   };
 
   for (const line of block.split("\n")) {
@@ -345,6 +325,20 @@ function parseDataviewBlock(block: string): ViewSuggestion {
       case "y_col":
         view.y_col = val.trim();
         break;
+      case "suggested_by":
+        view.suggested_by = val.trim();
+        break;
+      case "insight":
+        if (val.trim() !== "null") {
+          view.insight = val.trim();
+        }
+        break;
+      case "insight_edited":
+        view.insight_edited = val.trim() === "true";
+        break;
+      case "time_column":
+        view.time_column = val.trim();
+        break;
     }
   }
   return view;
@@ -360,9 +354,11 @@ function viewTypeToString(vt: string): string {
     ScatterPlot: "scatter_plot",
     Histogram: "histogram",
     Heatmap: "heatmap",
+    BoxPlot: "box_plot",
     OrderedBar: "ordered_bar",
-    RankedList: "ranked_list",
+    // RankedList removed — BarChart with limit handles this
     MultiLineChart: "multi_line_chart",
+    Choropleth: "choropleth",
   };
   return map[vt] || vt.toLowerCase();
 }
@@ -377,9 +373,11 @@ function stringToViewType(s: string): string {
     scatter_plot: "ScatterPlot",
     histogram: "Histogram",
     heatmap: "Heatmap",
+    box_plot: "BoxPlot",
     ordered_bar: "OrderedBar",
-    ranked_list: "RankedList",
+    ranked_list: "BarChart",
     multi_line_chart: "MultiLineChart",
+    choropleth: "Choropleth",
   };
   return map[s] || s;
 }

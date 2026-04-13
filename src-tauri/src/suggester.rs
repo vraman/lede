@@ -11,9 +11,10 @@ pub enum ViewType {
     ScatterPlot,
     Histogram,
     Heatmap,
+    BoxPlot,
     OrderedBar,
-    RankedList,
     MultiLineChart,
+    Choropleth,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -37,6 +38,18 @@ pub struct ViewSuggestion {
     pub x_col: Option<String>,
     pub y_col: Option<String>,
     pub shown_by_default: bool,
+    #[serde(default = "default_suggested_by")]
+    pub suggested_by: String,
+    #[serde(default)]
+    pub insight: Option<String>,
+    #[serde(default)]
+    pub insight_edited: bool,
+    #[serde(default)]
+    pub time_column: Option<String>,
+}
+
+fn default_suggested_by() -> String {
+    "rule".to_string()
 }
 
 /// Build a human-readable chart title.
@@ -66,8 +79,13 @@ fn humanize_title(
             let m = metric.unwrap_or("value");
             format!("{} distribution", capitalize(m))
         }
+        ViewType::Choropleth => {
+            let m = capitalize(metric.unwrap_or("value"));
+            let g = group_by.unwrap_or("region");
+            format!("{} by {}", m, prettify(g))
+        }
         _ => {
-            // LineChart, BarChart, RankedList, etc.
+            // LineChart, BarChart, etc.
             let m = capitalize(metric.unwrap_or("value"));
             if let Some(g) = group_by {
                 if is_temporal_group {
@@ -95,6 +113,58 @@ fn capitalize(s: &str) -> String {
 /// Replace underscores with spaces, lowercase.
 fn prettify(s: &str) -> String {
     s.replace('_', " ")
+}
+
+/// Known US state names and abbreviations for choropleth matching.
+const US_STATES: &[&str] = &[
+    "alabama", "al", "alaska", "ak", "arizona", "az", "arkansas", "ar",
+    "california", "ca", "colorado", "co", "connecticut", "ct", "delaware", "de",
+    "florida", "fl", "georgia", "ga", "hawaii", "hi", "idaho", "id",
+    "illinois", "il", "indiana", "in", "iowa", "ia", "kansas", "ks",
+    "kentucky", "ky", "louisiana", "la", "maine", "me", "maryland", "md",
+    "massachusetts", "ma", "michigan", "mi", "minnesota", "mn", "mississippi", "ms",
+    "missouri", "mo", "montana", "mt", "nebraska", "ne", "nevada", "nv",
+    "new hampshire", "nh", "new jersey", "nj", "new mexico", "nm", "new york", "ny",
+    "north carolina", "nc", "north dakota", "nd", "ohio", "oh", "oklahoma", "ok",
+    "oregon", "or", "pennsylvania", "pa", "rhode island", "ri", "south carolina", "sc",
+    "south dakota", "sd", "tennessee", "tn", "texas", "tx", "utah", "ut",
+    "vermont", "vt", "virginia", "va", "washington", "wa", "west virginia", "wv",
+    "wisconsin", "wi", "wyoming", "wy", "district of columbia", "dc",
+];
+
+/// A small set of common country names for choropleth matching.
+const COUNTRIES: &[&str] = &[
+    "united states", "usa", "us", "canada", "mexico", "brazil", "argentina",
+    "united kingdom", "uk", "france", "germany", "italy", "spain", "portugal",
+    "netherlands", "belgium", "sweden", "norway", "denmark", "finland",
+    "russia", "china", "japan", "india", "australia", "south korea", "indonesia",
+    "turkey", "egypt", "south africa", "nigeria", "kenya",
+    "saudi arabia", "israel", "iran", "iraq", "pakistan",
+    "thailand", "vietnam", "philippines", "malaysia", "singapore",
+    "colombia", "chile", "peru", "venezuela", "cuba",
+    "poland", "ukraine", "romania", "czech republic", "hungary", "austria",
+    "switzerland", "ireland", "greece", "new zealand",
+];
+
+/// Check whether a geographic column's sample values match known geographies
+/// (US states or world countries) well enough to render a choropleth.
+pub fn matches_known_geography(sample_values: &[String]) -> bool {
+    if sample_values.is_empty() {
+        return false;
+    }
+    use std::collections::HashSet;
+    let us_set: HashSet<&str> = US_STATES.iter().copied().collect();
+    let country_set: HashSet<&str> = COUNTRIES.iter().copied().collect();
+
+    let mut matches = 0;
+    for val in sample_values {
+        let lower = val.trim().to_lowercase();
+        if us_set.contains(lower.as_str()) || country_set.contains(lower.as_str()) {
+            matches += 1;
+        }
+    }
+    // Require >50% of sample values to match
+    matches * 2 > sample_values.len()
 }
 
 pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
@@ -176,11 +246,7 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
         }
         if let Some(num) = primary_metric {
             let agg = default_aggregate(num);
-            if cat.unique_count > 20 {
-                suggestions.push(make_ranked_list(&num.name, &cat.name, agg, false));
-            } else {
-                suggestions.push(make_bar_chart(&num.name, &cat.name, agg, false));
-            }
+            suggestions.push(make_bar_chart(&num.name, &cat.name, agg, false));
         }
     }
 
@@ -213,6 +279,10 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
             x_col: Some(numerics[0].name.clone()),
             y_col: Some(numerics[1].name.clone()),
             shown_by_default: false,
+            suggested_by: "rule".to_string(),
+            insight: None,
+            insight_edited: false,
+            time_column: None,
         });
     }
 
@@ -226,15 +296,19 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
         }
     }
 
-    // BarChart alternative for high-cardinality categorical slots (where RankedList is primary)
-    // Low-cardinality categoricals (<=20) already have BarChart as primary — RankedList
-    // would look identical, so no alternative is offered.
-    for cat in &categoricals {
-        if cat.unique_count > 20 && cat.unique_count <= 50 {
-            if let Some(num) = primary_metric {
-                let agg = default_aggregate(num);
-                suggestions.push(make_bar_chart(&num.name, &cat.name, agg, false));
-            }
+    // (No alternative for high-cardinality categoricals — BarChart with limit is sufficient)
+
+    // Choropleth alternative for geographic columns whose values match known geographies
+    for col in columns.iter().filter(|c| c.col_type == ColumnType::Geographic) {
+        if col.unique_count == 0 || col.unique_count > 50 {
+            continue;
+        }
+        if !matches_known_geography(&col.sample_values) {
+            continue;
+        }
+        if let Some(num) = primary_metric {
+            let agg = default_aggregate(num);
+            suggestions.push(make_view(ViewType::Choropleth, Some(&num.name), Some(&col.name), agg, false));
         }
     }
 
@@ -274,6 +348,10 @@ fn make_view(view_type: ViewType, metric: Option<&str>, group_by: Option<&str>, 
         x_col: None,
         y_col: None,
         shown_by_default: false,
+        suggested_by: "rule".to_string(),
+        insight: None,
+        insight_edited: false,
+        time_column: None,
     }
 }
 
@@ -290,22 +368,10 @@ fn make_bar_chart(metric: &str, group_by: &str, aggregate: Aggregate, is_tempora
         x_col: None,
         y_col: None,
         shown_by_default: false,
-    }
-}
-
-fn make_ranked_list(metric: &str, group_by: &str, aggregate: Aggregate, is_temporal_group: bool) -> ViewSuggestion {
-    let title = humanize_title(&ViewType::RankedList, Some(metric), Some(group_by), None, None, is_temporal_group);
-    ViewSuggestion {
-        view_type: ViewType::RankedList,
-        title,
-        metric: Some(metric.to_string()),
-        group_by: Some(group_by.to_string()),
-        aggregate,
-        sort: Some("desc".to_string()),
-        limit: Some(10),
-        x_col: None,
-        y_col: None,
-        shown_by_default: false,
+        suggested_by: "rule".to_string(),
+        insight: None,
+        insight_edited: false,
+        time_column: None,
     }
 }
 
@@ -371,16 +437,12 @@ mod tests {
         assert!(suggestions[2].shown_by_default);
         assert!(!suggestions[3].shown_by_default);
 
-        // Low-cardinality categorical (product has 3 values) should get BarChart but NOT
-        // a RankedList alternative (they'd look identical)
-        let has_product_bar = suggestions.iter().any(|s| {
+        // Low-cardinality categorical (product has 3 values) should get BarChart without limit
+        let product_bar = suggestions.iter().find(|s| {
             s.view_type == ViewType::BarChart && s.group_by.as_deref() == Some("product")
         });
-        let has_product_ranked = suggestions.iter().any(|s| {
-            s.view_type == ViewType::RankedList && s.group_by.as_deref() == Some("product")
-        });
-        assert!(has_product_bar, "Expected BarChart for product");
-        assert!(!has_product_ranked, "RankedList should not appear for low-cardinality product");
+        assert!(product_bar.is_some(), "Expected BarChart for product");
+        assert!(product_bar.unwrap().limit.is_none(), "Low-cardinality BarChart should have no limit");
     }
 
     #[test]
@@ -467,6 +529,46 @@ mod tests {
     fn test_title_underscore_column() {
         let title = humanize_title(&ViewType::BarChart, Some("total_spend"), Some("customer_type"), None, None, false);
         assert_eq!(title, "Total spend by customer type");
+    }
+
+    #[test]
+    fn test_shopify_no_choropleth() {
+        // shopify region values ("West", "Central", "East") don't match known geographies
+        let metas = classify_file("shopify.csv");
+        let suggestions = suggest_views(&metas);
+        let has_choropleth = suggestions.iter().any(|s| s.view_type == ViewType::Choropleth);
+        assert!(!has_choropleth, "Choropleth should not appear for non-standard regions");
+    }
+
+    #[test]
+    fn test_state_sales_has_choropleth() {
+        let metas = classify_file("state-sales.csv");
+        let suggestions = suggest_views(&metas);
+        let has_choropleth = suggestions.iter().any(|s| {
+            s.view_type == ViewType::Choropleth && s.group_by.as_deref() == Some("state")
+        });
+        assert!(has_choropleth, "Expected Choropleth for state+revenue, got: {:?}",
+            suggestions.iter().map(|s| format!("{:?}:{}", s.view_type, s.title)).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_matches_known_geography() {
+        // US state names
+        assert!(matches_known_geography(&["California", "Texas", "New York"].iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+        // US state abbreviations
+        assert!(matches_known_geography(&["CA", "TX", "NY"].iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+        // Countries
+        assert!(matches_known_geography(&["France", "Germany", "Japan"].iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+        // Non-geographic values
+        assert!(!matches_known_geography(&["West", "Central", "East"].iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+        // Mixed — less than half match
+        assert!(!matches_known_geography(&["California", "Region A", "Zone B"].iter().map(|s| s.to_string()).collect::<Vec<_>>()));
+    }
+
+    #[test]
+    fn test_choropleth_title() {
+        let title = humanize_title(&ViewType::Choropleth, Some("revenue"), Some("region"), None, None, false);
+        assert_eq!(title, "Revenue by region");
     }
 
     #[test]

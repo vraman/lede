@@ -1,5 +1,7 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import * as Plot from "@observablehq/plot";
+import * as topojson from "topojson-client";
+import type { Topology } from "topojson-specification";
 import { ParsedCSV, ViewSuggestion } from "../types";
 import { useDataContext } from "../DataContext";
 
@@ -29,6 +31,45 @@ const NUMERIC_TYPES = new Set([
   "NumericRatio",
   "NumericSigned",
 ]);
+
+const US_STATE_ABBREVS: Record<string, string> = {
+  al: "Alabama", ak: "Alaska", az: "Arizona", ar: "Arkansas", ca: "California",
+  co: "Colorado", ct: "Connecticut", de: "Delaware", fl: "Florida", ga: "Georgia",
+  hi: "Hawaii", id: "Idaho", il: "Illinois", in: "Indiana", ia: "Iowa",
+  ks: "Kansas", ky: "Kentucky", la: "Louisiana", me: "Maine", md: "Maryland",
+  ma: "Massachusetts", mi: "Michigan", mn: "Minnesota", ms: "Mississippi", mo: "Missouri",
+  mt: "Montana", ne: "Nebraska", nv: "Nevada", nh: "New Hampshire", nj: "New Jersey",
+  nm: "New Mexico", ny: "New York", nc: "North Carolina", nd: "North Dakota", oh: "Ohio",
+  ok: "Oklahoma", or: "Oregon", pa: "Pennsylvania", ri: "Rhode Island", sc: "South Carolina",
+  sd: "South Dakota", tn: "Tennessee", tx: "Texas", ut: "Utah", vt: "Vermont",
+  va: "Virginia", wa: "Washington", wv: "West Virginia", wi: "Wisconsin", wy: "Wyoming",
+  dc: "District of Columbia",
+};
+
+const US_STATE_NAMES = new Set(Object.values(US_STATE_ABBREVS).map(n => n.toLowerCase()));
+
+/** Normalize a geo value to the canonical name used in TopoJSON properties. */
+function normalizeGeoName(raw: string): string {
+  const lower = raw.trim().toLowerCase();
+  // Check if it's a US state abbreviation
+  if (US_STATE_ABBREVS[lower]) return US_STATE_ABBREVS[lower];
+  // Title-case it for matching
+  return lower.replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/** Detect whether sample values look like US states. */
+function looksLikeUSStates(values: string[]): boolean {
+  let matches = 0;
+  for (const v of values) {
+    const lower = v.trim().toLowerCase();
+    if (US_STATE_NAMES.has(lower) || US_STATE_ABBREVS[lower]) matches++;
+  }
+  return matches > values.length * 0.5;
+}
+
+// Module-level geo data cache
+let geoCache: Record<string, unknown> | null = null;
+let geoCacheKey = "";
 
 function truncLabel(s: string, max = 40): string {
   return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
@@ -110,13 +151,42 @@ const VIEW_TYPE_LABELS: Record<string, string> = {
   OrderedBar: "Ordered",
   ScatterPlot: "Scatter",
   Histogram: "Histogram",
-  RankedList: "Ranked",
+  BoxPlot: "Box Plot",
   Heatmap: "Heatmap",
+  Choropleth: "Map",
 };
 
 export default function ChartView({ data, suggestion, alternatives = [], onSwap, onChangeAggregate }: Props) {
   const { sourceFilename } = useDataContext();
   const containerRef = useRef<HTMLDivElement>(null);
+  const [geoData, setGeoData] = useState<unknown>(null);
+
+  // Async geo data loading for Choropleth
+  useEffect(() => {
+    if (suggestion.view_type !== "Choropleth") return;
+    const geoCol = suggestion.group_by;
+    if (!geoCol) return;
+
+    const sampleValues = data.sample_rows.slice(0, 20).map(
+      (row) => row[data.columns.findIndex((c) => c.name === geoCol)] || ""
+    );
+    const isUS = looksLikeUSStates(sampleValues);
+    const url = isUS ? "/geo/us-states-10m.json" : "/geo/countries-110m.json";
+
+    if (geoCacheKey === url && geoCache) {
+      setGeoData(geoCache);
+      return;
+    }
+
+    fetch(url)
+      .then((r) => r.json())
+      .then((topo) => {
+        geoCache = topo;
+        geoCacheKey = url;
+        setGeoData(topo);
+      })
+      .catch((e) => console.error("Failed to load geo data:", e));
+  }, [suggestion.view_type, suggestion.group_by, data]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -129,7 +199,13 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
         case "BarChart": {
           const groupBy = suggestion.group_by!;
           const metric = suggestion.metric!;
-          const agg = aggregate(rows, groupBy, metric, suggestion.aggregate);
+          let agg = aggregate(rows, groupBy, metric, suggestion.aggregate);
+          if (suggestion.sort === "desc") {
+            agg.sort((a, b) => Number(b[metric]) - Number(a[metric]));
+          }
+          if (suggestion.limit) {
+            agg = agg.slice(0, suggestion.limit);
+          }
           const barHeight = Math.max(200, agg.length * 24);
           chart = Plot.plot({
             height: barHeight,
@@ -191,8 +267,9 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
         }
 
         case "ScatterPlot": {
-          const xCol = suggestion.x_col!;
-          const yCol = suggestion.y_col!;
+          const xCol = suggestion.x_col || suggestion.metric;
+          const yCol = suggestion.y_col || suggestion.group_by;
+          if (!xCol || !yCol) break;
           chart = Plot.plot({
             height: 200,
             x: { label: truncLabel(xCol) },
@@ -222,6 +299,31 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
           break;
         }
 
+        case "BoxPlot": {
+          const metric = suggestion.metric!;
+          const groupBy = suggestion.group_by;
+          if (groupBy) {
+            chart = Plot.plot({
+              height: 250,
+              marginLeft: 100,
+              x: { label: truncLabel(metric) },
+              y: { label: truncLabel(groupBy) },
+              marks: [
+                Plot.boxX(rows, { x: metric, y: groupBy, fill: "#64748b", fillOpacity: 0.5 }),
+              ],
+            });
+          } else {
+            chart = Plot.plot({
+              height: 200,
+              x: { label: truncLabel(metric) },
+              marks: [
+                Plot.boxX(rows, { x: metric, fill: "#64748b", fillOpacity: 0.5 }),
+              ],
+            });
+          }
+          break;
+        }
+
         case "CountBar":
         case "OrderedBar": {
           const groupBy = suggestion.group_by!;
@@ -248,25 +350,83 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
           break;
         }
 
-        case "RankedList": {
-          const groupBy = suggestion.group_by!;
-          const metric = suggestion.metric!;
-          const agg = aggregate(rows, groupBy, metric, suggestion.aggregate);
-          agg.sort((a, b) => Number(b[metric]) - Number(a[metric]));
-          const limited = agg.slice(0, suggestion.limit || 10);
+        // RankedList is handled by BarChart with limit
+
+        case "Heatmap": {
+          const xCol = suggestion.x_col || suggestion.group_by;
+          const yCol = suggestion.y_col || suggestion.metric;
+          if (xCol && yCol) {
+            // If both are categorical, show count heatmap
+            // If one is numeric, use it as the fill value
+            const yIsNumeric = data.columns.find((c) => c.name === yCol && NUMERIC_TYPES.has(c.col_type));
+            if (yIsNumeric && suggestion.group_by) {
+              // Single dimension + numeric metric: not a real heatmap, skip
+              break;
+            } else {
+              // Two categoricals — count heatmap
+              chart = Plot.plot({
+                height: 250,
+                marginLeft: 120,
+                color: { scheme: "YlOrRd", legend: true, label: "count" },
+                marks: [
+                  Plot.cell(
+                    rows,
+                    Plot.group({ fill: "count" }, { x: xCol, y: yCol })
+                  ),
+                ],
+              });
+            }
+          }
+          break;
+        }
+
+        case "Choropleth": {
+          if (!geoData) break; // still loading
+          const geoCol = suggestion.group_by;
+          const metric = suggestion.metric;
+          if (!geoCol || !metric) break;
+
+          const agg = aggregate(rows, geoCol, metric, suggestion.aggregate);
+          const lookup = new Map<string, number>();
+          for (const row of agg) {
+            lookup.set(normalizeGeoName(String(row[geoCol])), Number(row[metric]));
+          }
+
+          const topo = geoData as Topology;
+          const objectKey = Object.keys(topo.objects).find(k => k !== "land" && k !== "nation") || Object.keys(topo.objects)[0];
+          const featureCollection = topojson.feature(topo, topo.objects[objectKey]) as unknown as GeoJSON.FeatureCollection;
+          const geoObj = topo.objects[objectKey] as Parameters<typeof topojson.mesh>[1];
+          const meshData = topojson.mesh(topo, geoObj);
+
+          // Detect which geo level we're rendering
+          const isUS = objectKey === "states";
+          const projection = isUS ? "albers-usa" : "equirectangular";
+
+          // Enrich features with data values
+          const enrichedFeatures = featureCollection.features.map((f) => ({
+            ...f,
+            properties: {
+              ...f.properties,
+              _value: lookup.get(f.properties?.name || "") ?? null,
+            },
+          }));
+
           chart = Plot.plot({
-            height: 200,
-            marginLeft: 100,
-            x: { label: truncLabel(metric) },
-            y: { label: truncLabel(groupBy) },
+            projection,
+            height: isUS ? 350 : 300,
+            color: {
+              scheme: "YlOrRd",
+              legend: true,
+              label: truncLabel(metric),
+              unknown: "#f0f0f0",
+            },
             marks: [
-              Plot.barX(limited, {
-                y: groupBy,
-                x: metric,
-                fill: "#64748b",
-                sort: { y: "-x" },
+              Plot.geo(enrichedFeatures, {
+                fill: (d: GeoJSON.Feature) => (d.properties as Record<string, unknown>)?._value as number | null,
+                stroke: "white",
+                strokeWidth: 0.5,
               }),
-              Plot.ruleX([0]),
+              Plot.geo(meshData, { stroke: "white", strokeWidth: 0.5, fill: "none" }),
             ],
           });
           break;
@@ -289,7 +449,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
         containerRef.current.innerHTML = "";
       }
     };
-  }, [data, suggestion]);
+  }, [data, suggestion, geoData]);
 
   const hasMetricAgg = suggestion.metric && suggestion.group_by
     && suggestion.view_type !== "CountBar"

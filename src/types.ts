@@ -26,9 +26,10 @@ export type ViewType =
   | "ScatterPlot"
   | "Histogram"
   | "Heatmap"
+  | "BoxPlot"
   | "OrderedBar"
-  | "RankedList"
-  | "MultiLineChart";
+  | "MultiLineChart"
+  | "Choropleth";
 
 export type Aggregate = "Sum" | "Avg" | "Count" | "Min" | "Max";
 
@@ -43,6 +44,10 @@ export interface ViewSuggestion {
   x_col: string | null;
   y_col: string | null;
   shown_by_default: boolean;
+  suggested_by: string;
+  insight: string | null;
+  insight_edited: boolean;
+  time_column: string | null;
 }
 
 export interface ParsedCSV {
@@ -50,4 +55,29 @@ export interface ParsedCSV {
   row_count: number;
   sample_rows: string[][];
   suggestions: ViewSuggestion[];
+}
+
+export interface ModelStatus {
+  downloaded: boolean;
+  downloading: boolean;
+  progress: number;
+}
+
+export interface AiViewSuggestion {
+  view_type: string;
+  title: string;
+  metric: string | null;
+  group_by: string | null;
+  aggregate: string | null;
+  time_column: string | null;
+  insight: string | null;
+  x_col: string | null;
+  y_col: string | null;
+  sort: string | null;
+  limit: number | null;
+}
+
+export interface AiInsightsResponse {
+  suggested_views: AiViewSuggestion[];
+  insights: string[];
 }

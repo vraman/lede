@@ -14,11 +14,14 @@ export default function DataviewNodeView({
 }: NodeViewProps) {
   const { data, suggestions } = useDataContext();
   const [showInsertMenu, setShowInsertMenu] = useState(false);
+  const [editingInsight, setEditingInsight] = useState(false);
+  const [insightDraft, setInsightDraft] = useState("");
   const viewConfig = node.attrs.viewConfig as ViewSuggestion | null;
 
   if (!data || !viewConfig) return null;
 
   const isSummary = viewConfig.view_type === "SummaryCard";
+  const isAi = viewConfig.suggested_by === "ai";
 
   // Compute alternative view types for this metric/group_by
   const alternatives = suggestions.filter(
@@ -59,19 +62,51 @@ export default function DataviewNodeView({
       .run();
   };
 
+  const handleInsightClick = () => {
+    if (viewConfig.insight) {
+      setInsightDraft(viewConfig.insight);
+      setEditingInsight(true);
+    }
+  };
+
+  const handleInsightSave = () => {
+    setEditingInsight(false);
+    updateAttributes({
+      viewConfig: {
+        ...viewConfig,
+        insight: insightDraft || null,
+        insight_edited: true,
+      },
+    });
+  };
+
+  const handleInsightDelete = () => {
+    setEditingInsight(false);
+    updateAttributes({
+      viewConfig: {
+        ...viewConfig,
+        insight: null,
+        insight_edited: false,
+      },
+    });
+  };
+
   return (
     <NodeViewWrapper className="dataview-wrapper" data-drag-handle="">
       <div className="dataview-controls">
         <span className="dataview-drag-handle" data-drag-handle="">
           &#x2630;
         </span>
-        <button
-          className="dataview-remove"
-          onClick={() => deleteNode()}
-          title="Remove view"
-        >
-          &times;
-        </button>
+        <div className="dataview-controls-right">
+          {isAi && <span className="ai-badge">&#x2726; AI</span>}
+          <button
+            className="dataview-remove"
+            onClick={() => deleteNode()}
+            title="Remove view"
+          >
+            &times;
+          </button>
+        </div>
       </div>
 
       <div className="dataview-content">
@@ -87,6 +122,34 @@ export default function DataviewNodeView({
           />
         )}
       </div>
+
+      {viewConfig.insight && !editingInsight && (
+        <div className="dataview-insight" onClick={handleInsightClick}>
+          <span className="insight-badge">&#x2726; AI</span>
+          <span className="insight-text">{viewConfig.insight}</span>
+        </div>
+      )}
+
+      {editingInsight && (
+        <div className="dataview-insight-edit">
+          <input
+            className="insight-input"
+            value={insightDraft}
+            onChange={(e) => setInsightDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleInsightSave();
+              if (e.key === "Escape") setEditingInsight(false);
+            }}
+            autoFocus
+          />
+          <button className="insight-save-btn" onClick={handleInsightSave}>
+            Save
+          </button>
+          <button className="insight-delete-btn" onClick={handleInsightDelete}>
+            Remove
+          </button>
+        </div>
+      )}
 
       <div className="dataview-insert-zone">
         <button

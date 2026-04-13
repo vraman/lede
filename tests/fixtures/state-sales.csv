@@ -1,0 +1,31 @@
+state,revenue,orders,category
+California,245000,1200,Electronics
+Texas,198000,980,Electronics
+New York,187000,920,Apparel
+Florida,165000,850,Electronics
+Illinois,142000,710,Home
+Pennsylvania,135000,680,Apparel
+Ohio,118000,590,Home
+Georgia,112000,560,Electronics
+North Carolina,105000,530,Apparel
+Michigan,98000,490,Home
+New Jersey,95000,475,Electronics
+Virginia,92000,460,Apparel
+Washington,88000,440,Electronics
+Arizona,82000,410,Home
+Massachusetts,79000,395,Electronics
+Tennessee,75000,375,Apparel
+Indiana,68000,340,Home
+Missouri,65000,325,Electronics
+Maryland,62000,310,Apparel
+Wisconsin,58000,290,Home
+Colorado,55000,275,Electronics
+Minnesota,52000,260,Home
+South Carolina,48000,240,Apparel
+Alabama,45000,225,Home
+Louisiana,42000,210,Electronics
+Kentucky,40000,200,Apparel
+Oregon,38000,190,Electronics
+Oklahoma,35000,175,Home
+Connecticut,33000,165,Electronics
+Utah,30000,150,Home
