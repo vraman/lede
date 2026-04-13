@@ -19,6 +19,7 @@ interface Props {
 export default function HomeScreen({ onOpenFile, onNewNotebook, loading, error }: Props) {
   const [recents, setRecents] = useState<RecentFile[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<RecentFile[]>("get_recent_files")
@@ -28,30 +29,27 @@ export default function HomeScreen({ onOpenFile, onNewNotebook, loading, error }
     // Check model status and start download if needed
     invoke<ModelStatus>("check_model_status")
       .then((status) => {
-        console.log("[model] status:", status);
         if (!status.downloaded && !status.downloading) {
-          console.log("[model] starting download...");
-          invoke("start_model_download").catch((e) =>
-            console.error("[model] start_model_download failed:", e)
-          );
+          invoke("start_model_download").catch(() => {
+            setDownloadError("Could not start AI model download. Check your internet connection.");
+          });
           setDownloadProgress(0);
         } else if (status.downloading) {
           setDownloadProgress(status.progress);
         }
       })
-      .catch((e) => console.error("[model] check_model_status failed:", e));
+      .catch(() => {});
 
     // Listen for download progress events
     const unlistenProgress = listen<number>("model-download-progress", (event) => {
       setDownloadProgress(event.payload);
     });
     const unlistenComplete = listen("model-download-complete", () => {
-      console.log("[model] download complete");
       setDownloadProgress(null);
     });
-    const unlistenError = listen<string>("model-download-error", (event) => {
-      console.error("[model] download error:", event.payload);
+    const unlistenError = listen<string>("model-download-error", () => {
       setDownloadProgress(null);
+      setDownloadError("AI model download failed. The app works without it — AI insights will be unavailable.");
     });
 
     return () => {
@@ -124,7 +122,7 @@ export default function HomeScreen({ onOpenFile, onNewNotebook, loading, error }
         {downloadProgress !== null && (
           <div className="model-download-banner">
             <span className="model-download-text">
-              Setting up AI insights...
+              Downloading AI model (2.5 GB) — charts work while this finishes
             </span>
             <div className="model-download-bar">
               <div
@@ -136,6 +134,11 @@ export default function HomeScreen({ onOpenFile, onNewNotebook, loading, error }
               {Math.round(downloadProgress * 100)}%
             </span>
           </div>
+        )}
+        {downloadError && (
+          <p className="home-status" style={{ color: "var(--text-muted)" }}>
+            {downloadError}
+          </p>
         )}
       </div>
     </main>
