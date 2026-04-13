@@ -49,7 +49,7 @@ const US_STATE_ABBREVS: Record<string, string> = {
 const US_STATE_NAMES = new Set(Object.values(US_STATE_ABBREVS).map(n => n.toLowerCase()));
 
 /** Normalize a geo value to the canonical name used in TopoJSON properties. */
-function normalizeGeoName(raw: string): string {
+export function normalizeGeoName(raw: string): string {
   const lower = raw.trim().toLowerCase();
   // Check if it's a US state abbreviation
   if (US_STATE_ABBREVS[lower]) return US_STATE_ABBREVS[lower];
@@ -58,7 +58,7 @@ function normalizeGeoName(raw: string): string {
 }
 
 /** Detect whether sample values look like US states. */
-function looksLikeUSStates(values: string[]): boolean {
+export function looksLikeUSStates(values: string[]): boolean {
   let matches = 0;
   for (const v of values) {
     const lower = v.trim().toLowerCase();
@@ -67,16 +67,17 @@ function looksLikeUSStates(values: string[]): boolean {
   return matches > values.length * 0.5;
 }
 
-// Module-level geo data cache
-let geoCache: Record<string, unknown> | null = null;
-let geoCacheKey = "";
+interface GeoCache {
+  data: unknown;
+  key: string;
+}
 
-function truncLabel(s: string, max = 40): string {
+export function truncLabel(s: string, max = 40): string {
   return s.length > max ? s.slice(0, max - 1) + "\u2026" : s;
 }
 
 /** Try to parse a date string into a Date object. Returns null on failure. */
-function tryParseDate(s: string): Date | null {
+export function tryParseDate(s: string): Date | null {
   // Try ISO format first (fast path)
   const d = new Date(s);
   if (!isNaN(d.getTime())) return d;
@@ -86,7 +87,7 @@ function tryParseDate(s: string): Date | null {
   return null;
 }
 
-function buildRows(data: ParsedCSV): Record<string, string | number>[] {
+export function buildRows(data: ParsedCSV): Record<string, string | number>[] {
   return data.sample_rows.map((row) => {
     const obj: Record<string, string | number> = {};
     data.columns.forEach((col, i) => {
@@ -102,7 +103,7 @@ function buildRows(data: ParsedCSV): Record<string, string | number>[] {
   });
 }
 
-function aggregate(
+export function aggregate(
   rows: Record<string, string | number>[],
   groupBy: string,
   metric: string,
@@ -129,7 +130,7 @@ function aggregate(
   });
 }
 
-function countByGroup(
+export function countByGroup(
   rows: Record<string, string | number>[],
   groupBy: string
 ): Record<string, string | number>[] {
@@ -159,6 +160,7 @@ const VIEW_TYPE_LABELS: Record<string, string> = {
 export default function ChartView({ data, suggestion, alternatives = [], onSwap, onChangeAggregate }: Props) {
   const { sourceFilename } = useDataContext();
   const containerRef = useRef<HTMLDivElement>(null);
+  const geoCacheRef = useRef<GeoCache>({ data: null, key: "" });
   const [geoData, setGeoData] = useState<unknown>(null);
 
   // Async geo data loading for Choropleth
@@ -173,16 +175,15 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
     const isUS = looksLikeUSStates(sampleValues);
     const url = isUS ? "/geo/us-states-10m.json" : "/geo/countries-110m.json";
 
-    if (geoCacheKey === url && geoCache) {
-      setGeoData(geoCache);
+    if (geoCacheRef.current.key === url && geoCacheRef.current.data) {
+      setGeoData(geoCacheRef.current.data);
       return;
     }
 
     fetch(url)
       .then((r) => r.json())
       .then((topo) => {
-        geoCache = topo;
-        geoCacheKey = url;
+        geoCacheRef.current = { data: topo, key: url };
         setGeoData(topo);
       })
       .catch((e) => console.error("Failed to load geo data:", e));
@@ -349,8 +350,6 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
           });
           break;
         }
-
-        // RankedList is handled by BarChart with limit
 
         case "Heatmap": {
           const xCol = suggestion.x_col || suggestion.group_by;

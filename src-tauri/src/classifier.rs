@@ -481,4 +481,22 @@ mod tests {
         let meta = classify_column("quantity", &values);
         assert_eq!(meta.col_type, ColumnType::NumericMeasure);
     }
+
+    #[test]
+    fn test_all_missing_values() {
+        let values: Vec<String> = vec!["", "", "", ""]
+            .into_iter().map(String::from).collect();
+        let meta = classify_column("data", &values);
+        // Should not panic; classified as Categorical with 0 unique non-empty values
+        assert_eq!(meta.col_type, ColumnType::Categorical);
+        assert_eq!(meta.total_count, 4);
+    }
+
+    #[test]
+    fn test_empty_column() {
+        let values: Vec<String> = vec![];
+        let meta = classify_column("empty", &values);
+        assert_eq!(meta.total_count, 0);
+        assert_eq!(meta.unique_count, 0);
+    }
 }
