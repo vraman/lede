@@ -17,23 +17,18 @@ export default function AiOptIn({ onEnabled }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Don't show if already enabled
-    if (localStorage.getItem(ENABLED_KEY) === "true") {
-      return;
-    }
-
     // Don't show if dismissed too many times
     const dismissals = parseInt(localStorage.getItem(DISMISS_KEY) || "0", 10);
     if (dismissals >= 3) {
       return;
     }
 
-    // Check if model is already downloaded (user may have enabled before)
+    // Only show if model needs downloading
     invoke<ModelStatus>("check_model_status")
       .then((status) => {
         if (status.downloaded) {
-          localStorage.setItem(ENABLED_KEY, "true");
-          onEnabled();
+          // Model already exists — toggle handles on/off, no card needed
+          return;
         } else if (status.downloading) {
           setDownloading(true);
           setProgress(status.progress);
