@@ -44,9 +44,6 @@ export function serializeFromEditor(meta: LedeMeta, editorJSON: JSONContent): st
       if (vc.insight_edited) {
         lines.push("insight_edited: true");
       }
-      if (vc.time_column) {
-        lines.push(`time_column: ${vc.time_column}`);
-      }
       lines.push("```");
       lines.push("");
     } else if (node.type === "heading") {
@@ -187,7 +184,6 @@ function parseDataviewBlock(block: string): ViewSuggestion {
     suggested_by: "rule",
     insight: null,
     insight_edited: false,
-    time_column: null,
   };
 
   for (const line of block.split("\n")) {
@@ -230,9 +226,7 @@ function parseDataviewBlock(block: string): ViewSuggestion {
       case "insight_edited":
         view.insight_edited = val.trim() === "true";
         break;
-      case "time_column":
-        view.time_column = val.trim();
-        break;
+      // time_column: ignored (removed)
     }
   }
   return view;

@@ -96,7 +96,6 @@ function aiViewToSuggestion(aiView: AiViewSuggestion): ViewSuggestion {
     suggested_by: "ai",
     insight: aiView.insight ?? null,
     insight_edited: false,
-    time_column: aiView.time_column ?? null,
   };
 }
 
@@ -115,7 +114,6 @@ function App() {
   const editorInstanceRef = useRef<Editor | null>(null);
   const metaRef = useRef<LedeMeta | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
-  const [aiInsights, setAiInsights] = useState<AiInsightsResponse | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [allSuggestions, setAllSuggestions] = useState<ViewSuggestion[]>([]);
 
@@ -144,7 +142,6 @@ function App() {
   const loadCSV = async (path: string) => {
     setLoading(true);
     setError(null);
-    setAiInsights(null);
     try {
       const result = await invoke<ParsedCSV>("parse_csv", { path });
       setData(result);
@@ -169,14 +166,10 @@ function App() {
   /** Phase 2: Request AI insights and merge into editor. */
   const requestAiInsights = async (csvPath: string) => {
     setAiLoading(true);
-    console.log("[ai] requesting insights for", csvPath);
     try {
       const response = await invoke<AiInsightsResponse>("generate_ai_insights", {
         path: csvPath,
       });
-      console.log("[ai] got response:", response);
-      setAiInsights(response);
-
       // Split AI views into alternatives (same metric+group_by) vs novel (new cards)
       const editor = editorInstanceRef.current;
       if (editor && response.suggested_views.length > 0) {
@@ -429,7 +422,7 @@ function App() {
   const sourceFilename = sourcePath.split("/").pop() || "";
 
   return (
-    <DataContext.Provider value={{ data, suggestions: allSuggestions, sourceFilename, aiInsights, aiLoading }}>
+    <DataContext.Provider value={{ data, suggestions: allSuggestions, sourceFilename, aiLoading }}>
       <main className="app workspace">
         <header className="app-header">
           {editingTitle ? (

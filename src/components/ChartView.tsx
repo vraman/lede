@@ -123,6 +123,10 @@ export function aggregate(
       value = vals.reduce((a, b) => a + b, 0) / vals.length;
     } else if (aggType === "Count") {
       value = vals.length;
+    } else if (aggType === "Min") {
+      value = Math.min(...vals);
+    } else if (aggType === "Max") {
+      value = Math.max(...vals);
     } else {
       value = vals.reduce((a, b) => a + b, 0);
     }
