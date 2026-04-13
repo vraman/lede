@@ -96,6 +96,7 @@ function aiViewToSuggestion(aiView: AiViewSuggestion): ViewSuggestion {
     suggested_by: "ai",
     insight: aiView.insight ?? null,
     insight_edited: false,
+    denominator: null,
   };
 }
 
@@ -268,6 +269,31 @@ function App() {
         const currentIsDefault = docTitle === sourcePath.split("/").pop()?.replace(".csv", "");
         if (currentIsDefault) {
           setDocTitle(response.suggested_title);
+        }
+      }
+
+      // Update summary card if AI suggests a better one
+      if (response.suggested_summary) {
+        const editor = editorInstanceRef.current;
+        if (editor) {
+          const summary = response.suggested_summary;
+          editor.state.doc.descendants((node, pos) => {
+            if (node.type.name === "dataview") {
+              const vc = node.attrs.viewConfig;
+              if (vc && vc.view_type === "SummaryCard" && vc.suggested_by !== "ai") {
+                const tr = editor.state.tr.setNodeAttribute(pos, "viewConfig", {
+                  ...vc,
+                  title: summary.title,
+                  metric: summary.metric,
+                  aggregate: summary.aggregate,
+                  denominator: summary.denominator || null,
+                  suggested_by: "ai",
+                });
+                editor.view.dispatch(tr);
+                return false; // stop after first
+              }
+            }
+          });
         }
       }
     } catch (e) {

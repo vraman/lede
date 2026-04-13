@@ -19,13 +19,31 @@ export default function SummaryCard({ data, suggestion }: Props) {
   let value: number;
   let label: string;
 
-  if (suggestion.aggregate === "Avg") {
-    value = values.reduce((a, b) => a + b, 0) / values.length;
-    label = `Avg ${metric}`;
+  const numerator = values.reduce((a, b) => a + b, 0);
+
+  if (suggestion.denominator) {
+    // Ratio: Sum(metric) / Sum(denominator)
+    const denomIndex = data.columns.findIndex((c) => c.name === suggestion.denominator);
+    if (denomIndex !== -1) {
+      const denomValues = data.sample_rows.map((row) => parseFloat(row[denomIndex])).filter((n) => !isNaN(n));
+      const denomSum = denomValues.reduce((a, b) => a + b, 0);
+      value = denomSum > 0 ? numerator / denomSum : 0;
+    } else {
+      value = numerator;
+    }
+  } else if (suggestion.aggregate === "Avg") {
+    value = numerator / values.length;
+  } else if (suggestion.aggregate === "Min") {
+    value = Math.min(...values);
+  } else if (suggestion.aggregate === "Max") {
+    value = Math.max(...values);
+  } else if (suggestion.aggregate === "Count") {
+    value = values.length;
   } else {
-    value = values.reduce((a, b) => a + b, 0);
-    label = `Total ${metric}`;
+    value = numerator;
   }
+
+  label = suggestion.title || `${suggestion.aggregate === "Avg" ? "Avg" : "Total"} ${metric}`;
 
   // Format with commas and 2 decimal places
   const formatted = value.toLocaleString(undefined, {

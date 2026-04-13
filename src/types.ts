@@ -47,6 +47,7 @@ export interface ViewSuggestion {
   suggested_by: string;
   insight: string | null;
   insight_edited: boolean;
+  denominator: string | null;
 }
 
 export interface ParsedCSV {
@@ -77,8 +78,16 @@ export interface AiViewSuggestion {
   limit: number | null;
 }
 
+export interface AiSummary {
+  title: string;
+  metric: string;
+  aggregate: string;
+  denominator: string | null;
+}
+
 export interface AiInsightsResponse {
   suggested_views: AiViewSuggestion[];
   insights: string[];
   suggested_title: string | null;
+  suggested_summary: AiSummary | null;
 }

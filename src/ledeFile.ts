@@ -184,6 +184,7 @@ function parseDataviewBlock(block: string): ViewSuggestion {
     suggested_by: "rule",
     insight: null,
     insight_edited: false,
+    denominator: null,
   };
 
   for (const line of block.split("\n")) {

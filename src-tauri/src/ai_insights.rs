@@ -28,6 +28,19 @@ pub struct AiInsightsResponse {
     pub insights: Vec<String>,
     #[serde(default)]
     pub suggested_title: Option<String>,
+    #[serde(default)]
+    pub suggested_summary: Option<AiSummary>,
+}
+
+/// AI-suggested summary card override.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AiSummary {
+    pub title: String,
+    pub metric: String,
+    pub aggregate: String,
+    /// Optional denominator for ratio metrics (e.g., revenue / orders)
+    #[serde(default)]
+    pub denominator: Option<String>,
 }
 
 /// Internal response parsed from the model — insights may be structured.
@@ -39,6 +52,8 @@ struct RawAiResponse {
     insights: Vec<RawInsight>,
     #[serde(default)]
     suggested_title: Option<String>,
+    #[serde(default)]
+    suggested_summary: Option<AiSummary>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -489,9 +504,11 @@ pub fn build_prompt(context: &CsvContext) -> String {
     prompt.push_str("- distribution: {metric} → \"Y ranges from A to B\"\n");
     prompt.push_str("- concentration: {metric, group_by, aggregate, n} → \"Top N account for P%\"\n");
     prompt.push_str("- count: {column} → \"N unique values\"\n\n");
-    prompt.push_str("Also include a suggested_title: a short, descriptive notebook title (3-6 words) based on the dataset content.\n\n");
+    prompt.push_str("Also include:\n");
+    prompt.push_str("- suggested_title: a short, descriptive notebook title (3-6 words)\n");
+    prompt.push_str("- suggested_summary: {title, metric, aggregate, denominator?} — the most interesting single number. For simple aggregates: {title:\"Total Revenue\", metric:\"revenue\", aggregate:\"Sum\"}. For ratios: {title:\"Revenue Per Order\", metric:\"revenue\", aggregate:\"Sum\", denominator:\"orders\"} — Rust will compute Sum(metric)/Sum(denominator).\n\n");
     prompt.push_str("Respond with ONLY valid JSON. Example:\n");
-    prompt.push_str(r#"{"suggested_title":"Product Revenue Analysis","suggested_views":[{"view_type":"BoxPlot","title":"Revenue spread by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight_kind":"compare_two","insight_params":{"metric":"revenue","group_by":"product","aggregate":"Sum"}}],"insights":[{"kind":"concentration","params":{"metric":"revenue","group_by":"product","aggregate":"Sum","n":3}}]}"#);
+    prompt.push_str(r#"{"suggested_title":"Product Revenue Analysis","suggested_summary":{"title":"Revenue Per Order","metric":"revenue","aggregate":"Sum","denominator":"orders"},"suggested_views":[{"view_type":"BoxPlot","title":"Revenue spread by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight_kind":"compare_two","insight_params":{"metric":"revenue","group_by":"product","aggregate":"Sum"}}],"insights":[{"kind":"concentration","params":{"metric":"revenue","group_by":"product","aggregate":"Sum","n":3}}]}"#);
     prompt.push_str("\n\nONLY use column names from the dataset.\n");
     prompt.push_str("<end_of_turn>\n<start_of_turn>model\n");
 
@@ -571,10 +588,20 @@ pub fn parse_ai_response(raw: &str, columns: &[ColumnMeta]) -> Result<AiInsights
         }
     }).collect();
 
+    // Validate suggested_summary references real columns
+    let suggested_summary = raw_response.suggested_summary.filter(|s| {
+        let metric_exists = columns.iter().any(|c| c.name == s.metric);
+        let denom_exists = s.denominator.as_ref()
+            .map(|d| columns.iter().any(|c| c.name == *d))
+            .unwrap_or(true);
+        metric_exists && denom_exists
+    });
+
     let mut response = AiInsightsResponse {
         suggested_views: raw_response.suggested_views,
         insights,
         suggested_title: raw_response.suggested_title,
+        suggested_summary,
     };
 
     response.suggested_views.retain(|s| validate_ai_suggestion(s, columns));
