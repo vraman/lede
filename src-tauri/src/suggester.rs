@@ -566,6 +566,12 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_columns_returns_empty() {
+        let suggestions = suggest_views(&[]);
+        assert!(suggestions.is_empty());
+    }
+
+    #[test]
     fn test_choropleth_title() {
         let title = humanize_title(&ViewType::Choropleth, Some("revenue"), Some("region"), None, None, false);
         assert_eq!(title, "Revenue by region");

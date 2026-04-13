@@ -51,13 +51,90 @@ pub struct AiViewSuggestion {
     pub limit: Option<usize>,
 }
 
+/// Pre-computed summary for a single column.
+pub struct ColumnSummary {
+    pub name: String,
+    pub col_type: crate::classifier::ColumnType,
+    pub unique_count: usize,
+    /// For categoricals/geographic: top values by frequency
+    pub top_values: Vec<(String, usize)>,
+    /// For numerics: min, max, mean
+    pub numeric_stats: Option<(f64, f64, f64)>,
+    /// For temporal: earliest and latest
+    pub date_range: Option<(String, String)>,
+}
+
 /// Input context for prompt building.
 pub struct CsvContext {
     pub filename: String,
     pub row_count: usize,
     pub columns: Vec<ColumnMeta>,
-    pub sample_rows: Vec<Vec<String>>,
+    pub summaries: Vec<ColumnSummary>,
     pub current_views: Vec<String>,
+}
+
+/// Compute column summaries from sample rows.
+pub fn compute_summaries(columns: &[ColumnMeta], sample_rows: &[Vec<String>]) -> Vec<ColumnSummary> {
+    use std::collections::HashMap;
+
+    columns.iter().enumerate()
+        .filter(|(_, col)| col.col_type != crate::classifier::ColumnType::Identifier)
+        .map(|(i, col)| {
+            let values: Vec<&str> = sample_rows.iter()
+                .filter_map(|row| row.get(i).map(|s| s.as_str()))
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            let mut top_values = Vec::new();
+            let mut numeric_stats = None;
+            let mut date_range = None;
+
+            match col.col_type {
+                crate::classifier::ColumnType::NumericMeasure
+                | crate::classifier::ColumnType::NumericRatio
+                | crate::classifier::ColumnType::NumericSigned
+                | crate::classifier::ColumnType::NumericDimension => {
+                    let nums: Vec<f64> = values.iter()
+                        .filter_map(|v| v.parse::<f64>().ok())
+                        .collect();
+                    if !nums.is_empty() {
+                        let min = nums.iter().cloned().fold(f64::INFINITY, f64::min);
+                        let max = nums.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                        let mean = nums.iter().sum::<f64>() / nums.len() as f64;
+                        numeric_stats = Some((min, max, mean));
+                    }
+                }
+                crate::classifier::ColumnType::Temporal => {
+                    if let (Some(first), Some(last)) = (values.first(), values.last()) {
+                        let mut sorted: Vec<&str> = values.clone();
+                        sorted.sort();
+                        date_range = Some((sorted[0].to_string(), sorted[sorted.len() - 1].to_string()));
+                    }
+                }
+                _ => {
+                    // Categorical, Geographic, OrderedCategorical
+                    let mut counts: HashMap<&str, usize> = HashMap::new();
+                    for v in &values {
+                        *counts.entry(v).or_insert(0) += 1;
+                    }
+                    let mut sorted: Vec<_> = counts.into_iter().collect();
+                    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+                    top_values = sorted.into_iter().take(5)
+                        .map(|(k, v)| (k.to_string(), v))
+                        .collect();
+                }
+            }
+
+            ColumnSummary {
+                name: col.name.clone(),
+                col_type: col.col_type.clone(),
+                unique_count: col.unique_count,
+                top_values,
+                numeric_stats,
+                date_range,
+            }
+        })
+        .collect()
 }
 
 pub struct InsightEngine {
@@ -119,8 +196,13 @@ impl InsightEngine {
             .str_to_token(&prompt, AddBos::Always)
             .map_err(|e| format!("Tokenization failed: {}", e))?;
 
-        if tokens.len() >= CONTEXT_SIZE as usize {
-            return Err("Prompt too long for context window".to_string());
+        // Leave room for generation (at least 256 tokens)
+        let max_prompt_tokens = CONTEXT_SIZE as usize - 256;
+        if tokens.len() > max_prompt_tokens {
+            return Err(format!(
+                "Prompt too long ({} tokens, max {}). Dataset has too many columns for AI analysis.",
+                tokens.len(), max_prompt_tokens
+            ));
         }
 
         // Create batch and add prompt tokens
@@ -177,12 +259,7 @@ impl InsightEngine {
         }
 
         // Parse JSON from output
-        eprintln!("[AI] Raw output: {}", &output[..output.len().min(1000)]);
-        let result = parse_ai_response(&output, &context.columns);
-        if let Ok(ref resp) = result {
-            eprintln!("[AI] Parsed: {} views, {} insights", resp.suggested_views.len(), resp.insights.len());
-        }
-        result
+        parse_ai_response(&output, &context.columns)
     }
 }
 
@@ -195,23 +272,20 @@ pub fn build_prompt(context: &CsvContext) -> String {
 
     prompt.push_str(&format!("## Dataset: {} ({} rows)\n\n", context.filename, context.row_count));
 
-    prompt.push_str("## Columns:\n");
-    for col in &context.columns {
-        prompt.push_str(&format!(
-            "- {} (type: {:?}, {} unique, samples: {})\n",
-            col.name,
-            col.col_type,
-            col.unique_count,
-            col.sample_values.join(", ")
-        ));
-    }
-
-    if !context.sample_rows.is_empty() {
-        prompt.push_str("\n## Data:\n");
-        let col_names: Vec<&str> = context.columns.iter().map(|c| c.name.as_str()).collect();
-        prompt.push_str(&format!("| {} |\n", col_names.join(" | ")));
-        for row in context.sample_rows.iter().take(10) {
-            prompt.push_str(&format!("| {} |\n", row.join(" | ")));
+    prompt.push_str("## Column Statistics:\n");
+    for s in &context.summaries {
+        prompt.push_str(&format!("### {} ({:?}, {} unique)\n", s.name, s.col_type, s.unique_count));
+        if let Some((min, max, mean)) = s.numeric_stats {
+            prompt.push_str(&format!("  min={:.2}, max={:.2}, mean={:.2}\n", min, max, mean));
+        }
+        if let Some((earliest, latest)) = &s.date_range {
+            prompt.push_str(&format!("  range: {} to {}\n", earliest, latest));
+        }
+        if !s.top_values.is_empty() {
+            let top: Vec<String> = s.top_values.iter()
+                .map(|(val, count)| format!("{} ({})", val, count))
+                .collect();
+            prompt.push_str(&format!("  top values: {}\n", top.join(", ")));
         }
     }
 
@@ -306,18 +380,7 @@ pub fn parse_ai_response(raw: &str, columns: &[ColumnMeta]) -> Result<AiInsights
         )
     })?;
 
-    let before = response.suggested_views.len();
-    response.suggested_views.retain(|s| {
-        let valid = validate_ai_suggestion(s, columns);
-        if !valid {
-            eprintln!("[AI] Filtered out: {} ({:?} metric={:?} group_by={:?} x_col={:?} y_col={:?})",
-                s.view_type, s.title, s.metric, s.group_by, s.x_col, s.y_col);
-        }
-        valid
-    });
-    if before != response.suggested_views.len() {
-        eprintln!("[AI] Filtered {}/{} suggestions", before - response.suggested_views.len(), before);
-    }
+    response.suggested_views.retain(|s| validate_ai_suggestion(s, columns));
 
     Ok(response)
 }
@@ -385,6 +448,8 @@ pub async fn generate_ai_insights(
     // Parse CSV to get context
     let parsed = crate::commands::parse_csv(path.clone())?;
 
+    let summaries = compute_summaries(&parsed.columns, &parsed.sample_rows);
+
     let context = CsvContext {
         filename: path
             .split('/')
@@ -393,7 +458,7 @@ pub async fn generate_ai_insights(
             .to_string(),
         row_count: parsed.row_count,
         columns: parsed.columns.clone(),
-        sample_rows: parsed.sample_rows.clone(),
+        summaries,
         current_views: parsed
             .suggestions
             .iter()
@@ -444,17 +509,31 @@ mod tests {
                     sample_values: vec!["Widget".to_string(), "Gadget".to_string()],
                 },
             ],
-            sample_rows: vec![
-                vec![
-                    "2024-01-01".to_string(),
-                    "1200.50".to_string(),
-                    "Widget".to_string(),
-                ],
-                vec![
-                    "2024-01-02".to_string(),
-                    "3400.00".to_string(),
-                    "Gadget".to_string(),
-                ],
+            summaries: vec![
+                ColumnSummary {
+                    name: "date".to_string(),
+                    col_type: ColumnType::Temporal,
+                    unique_count: 30,
+                    top_values: vec![],
+                    numeric_stats: None,
+                    date_range: Some(("2024-01-01".to_string(), "2024-12-31".to_string())),
+                },
+                ColumnSummary {
+                    name: "revenue".to_string(),
+                    col_type: ColumnType::NumericMeasure,
+                    unique_count: 95,
+                    top_values: vec![],
+                    numeric_stats: Some((100.0, 5000.0, 1200.50)),
+                    date_range: None,
+                },
+                ColumnSummary {
+                    name: "product".to_string(),
+                    col_type: ColumnType::Categorical,
+                    unique_count: 5,
+                    top_values: vec![("Widget".to_string(), 40), ("Gadget".to_string(), 30)],
+                    numeric_stats: None,
+                    date_range: None,
+                },
             ],
             current_views: vec![
                 "Revenue".to_string(),
@@ -482,11 +561,16 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_includes_sample_rows() {
+    fn test_prompt_includes_summaries() {
         let ctx = sample_context();
         let prompt = build_prompt(&ctx);
-        assert!(prompt.contains("1200.50"));
-        assert!(prompt.contains("Widget"));
+        // Numeric stats
+        assert!(prompt.contains("min=100.00"), "Should include numeric min");
+        assert!(prompt.contains("mean=1200.50"), "Should include numeric mean");
+        // Categorical top values
+        assert!(prompt.contains("Widget (40)"), "Should include top value counts");
+        // Date range
+        assert!(prompt.contains("2024-01-01"), "Should include date range");
     }
 
     #[test]
@@ -570,6 +654,40 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_heatmap_with_metric_group_by_accepted() {
+        // AI fallback: Heatmap using metric+group_by instead of x_col+y_col
+        let json = r#"{"suggested_views":[{"view_type":"Heatmap","title":"test","metric":"revenue","group_by":"product"}],"insights":[]}"#;
+        let result = parse_ai_response(json, &test_columns()).unwrap();
+        assert_eq!(result.suggested_views.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_choropleth_non_geographic_rejected() {
+        // Choropleth with group_by column whose values don't match known geographies
+        let json = r#"{"suggested_views":[{"view_type":"Choropleth","title":"test","metric":"revenue","group_by":"product","aggregate":"Sum"}],"insights":[]}"#;
+        let result = parse_ai_response(json, &test_columns()).unwrap();
+        assert!(result.suggested_views.is_empty());
+    }
+
+    #[test]
+    fn test_parse_missing_insights_key() {
+        // Model omits "insights" key entirely — should still parse suggested_views
+        let json = r#"{"suggested_views":[{"view_type":"BarChart","title":"test","metric":"revenue","group_by":"product","aggregate":"Sum"}]}"#;
+        let result = parse_ai_response(json, &test_columns()).unwrap();
+        assert_eq!(result.suggested_views.len(), 1);
+        assert!(result.insights.is_empty());
+    }
+
+    #[test]
+    fn test_parse_missing_suggested_views_key() {
+        // Model omits "suggested_views" key — insights should still come through
+        let json = r#"{"insights":["Revenue is growing 10% month over month"]}"#;
+        let result = parse_ai_response(json, &test_columns()).unwrap();
+        assert!(result.suggested_views.is_empty());
+        assert_eq!(result.insights.len(), 1);
+    }
+
+    #[test]
     fn test_engine_not_loaded() {
         let engine = InsightEngine::new();
         assert!(!engine.is_loaded());
@@ -600,5 +718,49 @@ mod tests {
     fn test_extract_json_nested() {
         let input = r#"{"outer": {"inner": 1}}"#;
         assert_eq!(extract_json(input), r#"{"outer": {"inner": 1}}"#);
+    }
+
+    #[test]
+    fn test_prompt_size_for_wide_dataset() {
+        // Simulate customers-10000.csv: 12 columns, 8 identifiers
+        let columns: Vec<ColumnMeta> = vec![
+            ColumnMeta { name: "Index".into(), col_type: ColumnType::Identifier, unique_count: 5000, total_count: 10000, sample_values: vec!["1".into(), "2".into(), "3".into()] },
+            ColumnMeta { name: "Customer Id".into(), col_type: ColumnType::Identifier, unique_count: 5000, total_count: 10000, sample_values: vec!["EB54EF".into()] },
+            ColumnMeta { name: "First Name".into(), col_type: ColumnType::Categorical, unique_count: 690, total_count: 10000, sample_values: vec!["Heather".into(), "Bob".into(), "Alice".into()] },
+            ColumnMeta { name: "Last Name".into(), col_type: ColumnType::Categorical, unique_count: 984, total_count: 10000, sample_values: vec!["Smith".into(), "Jones".into()] },
+            ColumnMeta { name: "Company".into(), col_type: ColumnType::Identifier, unique_count: 4797, total_count: 10000, sample_values: vec!["Acme".into()] },
+            ColumnMeta { name: "City".into(), col_type: ColumnType::Geographic, unique_count: 4715, total_count: 10000, sample_values: vec!["Portland".into(), "Denver".into()] },
+            ColumnMeta { name: "Country".into(), col_type: ColumnType::Geographic, unique_count: 243, total_count: 10000, sample_values: vec!["Norway".into(), "France".into(), "Japan".into()] },
+            ColumnMeta { name: "Phone 1".into(), col_type: ColumnType::Identifier, unique_count: 5000, total_count: 10000, sample_values: vec!["555-1234".into()] },
+            ColumnMeta { name: "Phone 2".into(), col_type: ColumnType::Identifier, unique_count: 5000, total_count: 10000, sample_values: vec!["555-5678".into()] },
+            ColumnMeta { name: "Email".into(), col_type: ColumnType::Identifier, unique_count: 5000, total_count: 10000, sample_values: vec!["a@b.com".into()] },
+            ColumnMeta { name: "Subscription Date".into(), col_type: ColumnType::Temporal, unique_count: 878, total_count: 10000, sample_values: vec!["2020-08-26".into()] },
+            ColumnMeta { name: "Website".into(), col_type: ColumnType::Identifier, unique_count: 4517, total_count: 10000, sample_values: vec!["http://example.com".into()] },
+        ];
+        let sample_rows: Vec<Vec<String>> = (0..5).map(|i| {
+            vec![
+                i.to_string(), format!("ID{}", i), "Alice".into(), "Smith".into(),
+                "Acme".into(), "Portland".into(), "Norway".into(),
+                "555-1234".into(), "555-5678".into(), "a@b.com".into(),
+                "2020-01-01".into(), "http://example.com".into(),
+            ]
+        }).collect();
+        let summaries = compute_summaries(&columns, &sample_rows);
+        let ctx = CsvContext {
+            filename: "customers-10000.csv".into(),
+            row_count: 10000,
+            columns,
+            summaries,
+            current_views: vec![],
+        };
+        let prompt = build_prompt(&ctx);
+        // Prompt should be well under 4096 tokens (~4 chars per token as rough estimate)
+        // Identifier columns should be filtered out
+        assert!(!prompt.contains("Customer Id"), "Identifiers should be filtered from prompt");
+        assert!(!prompt.contains("Phone 1"), "Identifiers should be filtered from prompt");
+        assert!(prompt.contains("Country"), "Geographic columns should be in prompt");
+        assert!(prompt.contains("Subscription Date"), "Temporal columns should be in prompt");
+        // Rough size check: prompt should be under 3000 chars (~750 tokens)
+        assert!(prompt.len() < 3000, "Prompt too long: {} chars", prompt.len());
     }
 }
