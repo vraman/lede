@@ -44,8 +44,6 @@ pub struct ViewSuggestion {
     pub insight: Option<String>,
     #[serde(default)]
     pub insight_edited: bool,
-    #[serde(default)]
-    pub time_column: Option<String>,
 }
 
 fn default_suggested_by() -> String {
@@ -282,8 +280,7 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
             suggested_by: "rule".to_string(),
             insight: None,
             insight_edited: false,
-            time_column: None,
-        });
+            });
     }
 
     // --- Phase 2: Alternatives (different view_type for same metric+group_by) ---
@@ -351,7 +348,6 @@ fn make_view(view_type: ViewType, metric: Option<&str>, group_by: Option<&str>, 
         suggested_by: "rule".to_string(),
         insight: None,
         insight_edited: false,
-        time_column: None,
     }
 }
 
@@ -371,7 +367,6 @@ fn make_bar_chart(metric: &str, group_by: &str, aggregate: Aggregate, is_tempora
         suggested_by: "rule".to_string(),
         insight: None,
         insight_edited: false,
-        time_column: None,
     }
 }
 

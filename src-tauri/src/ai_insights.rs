@@ -19,12 +19,29 @@ const MAX_GENERATE_TOKENS: usize = 1024;
 /// Context window size for inference.
 const CONTEXT_SIZE: u32 = 4096;
 
+/// Public response sent to the frontend — insights are plain strings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiInsightsResponse {
     #[serde(default)]
     pub suggested_views: Vec<AiViewSuggestion>,
     #[serde(default)]
     pub insights: Vec<String>,
+}
+
+/// Internal response parsed from the model — insights may be structured.
+#[derive(Debug, Clone, Deserialize)]
+struct RawAiResponse {
+    #[serde(default)]
+    suggested_views: Vec<AiViewSuggestion>,
+    #[serde(default)]
+    insights: Vec<RawInsight>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum RawInsight {
+    Structured(AiInsight),
+    Plain(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,9 +55,11 @@ pub struct AiViewSuggestion {
     #[serde(default)]
     pub aggregate: Option<String>,
     #[serde(default)]
-    pub time_column: Option<String>,
-    #[serde(default)]
     pub insight: Option<String>,
+    #[serde(default)]
+    pub insight_kind: Option<String>,
+    #[serde(default)]
+    pub insight_params: Option<serde_json::Value>,
     #[serde(default)]
     pub x_col: Option<String>,
     #[serde(default)]
@@ -49,6 +68,18 @@ pub struct AiViewSuggestion {
     pub sort: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
+}
+
+/// Structured standalone insight from AI (internal parsing only).
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+struct AiInsight {
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub params: Option<serde_json::Value>,
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 /// Pre-computed summary for a single column.
@@ -70,6 +101,7 @@ pub struct CsvContext {
     pub row_count: usize,
     pub columns: Vec<ColumnMeta>,
     pub summaries: Vec<ColumnSummary>,
+    pub sample_rows: Vec<Vec<String>>,
     pub current_views: Vec<String>,
 }
 
@@ -105,7 +137,7 @@ pub fn compute_summaries(columns: &[ColumnMeta], sample_rows: &[Vec<String>]) ->
                     }
                 }
                 crate::classifier::ColumnType::Temporal => {
-                    if let (Some(first), Some(last)) = (values.first(), values.last()) {
+                    if !values.is_empty() {
                         let mut sorted: Vec<&str> = values.clone();
                         sorted.sort();
                         date_range = Some((sorted[0].to_string(), sorted[sorted.len() - 1].to_string()));
@@ -135,6 +167,139 @@ pub fn compute_summaries(columns: &[ColumnMeta], sample_rows: &[Vec<String>]) ->
             }
         })
         .collect()
+}
+
+/// Helper: find a column index by name.
+fn col_index(columns: &[ColumnMeta], name: &str) -> Option<usize> {
+    columns.iter().position(|c| c.name == name)
+}
+
+/// Helper: extract numeric values for a column from sample rows.
+fn numeric_values(columns: &[ColumnMeta], sample_rows: &[Vec<String>], col_name: &str) -> Vec<f64> {
+    let idx = match col_index(columns, col_name) { Some(i) => i, None => return vec![] };
+    sample_rows.iter()
+        .filter_map(|row| row.get(idx)?.parse::<f64>().ok())
+        .collect()
+}
+
+/// Helper: aggregate numeric values by a group column.
+fn aggregate_by_group(
+    columns: &[ColumnMeta],
+    sample_rows: &[Vec<String>],
+    metric: &str,
+    group_by: &str,
+    agg: &str,
+) -> Vec<(String, f64)> {
+    let metric_idx = match col_index(columns, metric) { Some(i) => i, None => return vec![] };
+    let group_idx = match col_index(columns, group_by) { Some(i) => i, None => return vec![] };
+
+    let mut groups: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+    for row in sample_rows {
+        let key = match row.get(group_idx) { Some(k) if !k.is_empty() => k.clone(), _ => continue };
+        let val = match row.get(metric_idx).and_then(|v| v.parse::<f64>().ok()) { Some(v) => v, None => continue };
+        groups.entry(key).or_default().push(val);
+    }
+
+    let mut result: Vec<(String, f64)> = groups.into_iter().map(|(key, vals)| {
+        let value = match agg {
+            "Avg" => vals.iter().sum::<f64>() / vals.len() as f64,
+            "Count" => vals.len() as f64,
+            "Min" => vals.iter().cloned().fold(f64::INFINITY, f64::min),
+            "Max" => vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            _ => vals.iter().sum::<f64>(), // Sum
+        };
+        (key, value)
+    }).collect();
+    result.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    result
+}
+
+/// Format a number for display (drop decimals if integer-like).
+fn fmt_num(v: f64) -> String {
+    if v.abs() >= 1000.0 {
+        // Add comma separators
+        let s = if v == v.round() { format!("{}", v as i64) } else { format!("{:.2}", v) };
+        let parts: Vec<&str> = s.splitn(2, '.').collect();
+        let int_part = parts[0];
+        let negative = int_part.starts_with('-');
+        let digits: &str = if negative { &int_part[1..] } else { int_part };
+        let mut result = String::new();
+        for (i, c) in digits.chars().rev().enumerate() {
+            if i > 0 && i % 3 == 0 { result.push(','); }
+            result.push(c);
+        }
+        let formatted: String = result.chars().rev().collect();
+        let formatted = if negative { format!("-{}", formatted) } else { formatted };
+        if parts.len() > 1 { format!("{}.{}", formatted, parts[1]) } else { formatted }
+    } else if v == v.round() {
+        format!("{}", v as i64)
+    } else {
+        format!("{:.2}", v)
+    }
+}
+
+/// Compute an insight from the model's structured suggestion using actual data.
+pub fn realize_insight(
+    kind: &str,
+    params: &serde_json::Value,
+    sample_rows: &[Vec<String>],
+    columns: &[ColumnMeta],
+) -> Option<String> {
+    let get_str = |key: &str| params.get(key).and_then(|v| v.as_str());
+    let get_usize = |key: &str| params.get(key).and_then(|v| v.as_u64()).map(|v| v as usize);
+
+    match kind {
+        "top_value" => {
+            let metric = get_str("metric")?;
+            let group_by = get_str("group_by")?;
+            let agg = get_str("aggregate").unwrap_or("Sum");
+            let groups = aggregate_by_group(columns, sample_rows, metric, group_by, agg);
+            let (top_name, top_val) = groups.first()?;
+            Some(format!("{} has the highest {} ({}) at {}", top_name, metric, agg.to_lowercase(), fmt_num(*top_val)))
+        }
+        "compare_two" => {
+            let metric = get_str("metric")?;
+            let group_by = get_str("group_by")?;
+            let agg = get_str("aggregate").unwrap_or("Sum");
+            let groups = aggregate_by_group(columns, sample_rows, metric, group_by, agg);
+            if groups.len() < 2 { return None; }
+            let (a_name, a_val) = &groups[0];
+            let (b_name, b_val) = &groups[1];
+            if *b_val == 0.0 { return None; }
+            let pct = ((a_val - b_val) / b_val * 100.0).round();
+            Some(format!("{}'s {} ({}) is {}% higher than {}'s ({})",
+                a_name, metric, fmt_num(*a_val), pct, b_name, fmt_num(*b_val)))
+        }
+        "distribution" => {
+            let metric = get_str("metric")?;
+            let vals = numeric_values(columns, sample_rows, metric);
+            if vals.is_empty() { return None; }
+            let min = vals.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let mean = vals.iter().sum::<f64>() / vals.len() as f64;
+            Some(format!("{} ranges from {} to {} (mean {})", metric, fmt_num(min), fmt_num(max), fmt_num(mean)))
+        }
+        "concentration" => {
+            let metric = get_str("metric")?;
+            let group_by = get_str("group_by")?;
+            let agg = get_str("aggregate").unwrap_or("Sum");
+            let n = get_usize("n").unwrap_or(3);
+            let groups = aggregate_by_group(columns, sample_rows, metric, group_by, agg);
+            let total: f64 = groups.iter().map(|(_, v)| v).sum();
+            if total == 0.0 { return None; }
+            let top_n: f64 = groups.iter().take(n).map(|(_, v)| v).sum();
+            let pct = (top_n / total * 100.0).round();
+            let top_names: Vec<&str> = groups.iter().take(n).map(|(k, _)| k.as_str()).collect();
+            Some(format!("Top {} {} ({}) account for {}% of total {} ({})",
+                n, group_by, top_names.join(", "), pct, metric, fmt_num(total)))
+        }
+        "count" => {
+            let column = get_str("column")?;
+            let col = columns.iter().find(|c| c.name == column)?;
+            Some(format!("There are {} unique {} values", col.unique_count, column))
+        }
+        _ => None,
+    }
 }
 
 pub struct InsightEngine {
@@ -258,8 +423,10 @@ impl InsightEngine {
             output.push_str(&piece);
         }
 
-        // Parse JSON from output
-        parse_ai_response(&output, &context.columns)
+        // Parse JSON from output, then realize structured insights with actual data
+        let mut response = parse_ai_response(&output, &context.columns)?;
+        realize_all_insights(&mut response, &context.sample_rows, &context.columns);
+        Ok(response)
     }
 }
 
@@ -268,7 +435,7 @@ pub fn build_prompt(context: &CsvContext) -> String {
     let mut prompt = String::new();
 
     prompt.push_str("<start_of_turn>user\n");
-    prompt.push_str("You are a data analyst. Study this dataset and compute specific findings.\n\n");
+    prompt.push_str("You are a data analyst looking for SURPRISING findings — things a user wouldn't notice by glancing at the data.\n\n");
 
     prompt.push_str(&format!("## Dataset: {} ({} rows)\n\n", context.filename, context.row_count));
 
@@ -297,20 +464,30 @@ pub fn build_prompt(context: &CsvContext) -> String {
     }
 
     prompt.push_str("\n## Task:\n");
-    prompt.push_str("Suggest 1-3 NEW visualizations NOT already shown. Write a specific insight for each citing actual values.\n");
-    prompt.push_str("Write 1-2 standalone insights with concrete numbers. NO generic statements.\n\n");
+    prompt.push_str("Suggest 1-3 NEW visualizations NOT already shown.\n");
+    prompt.push_str("Focus on NON-OBVIOUS findings. Skip things that are trivially true:\n");
+    prompt.push_str("- Do NOT suggest scatter plots between metrics that are mathematically related (e.g. revenue vs orders, price vs total)\n");
+    prompt.push_str("- Do NOT state that a larger group has a larger total — that's obvious\n");
+    prompt.push_str("- DO look for: outliers, uneven distributions, surprising category leaders, unexpected ratios (e.g. highest revenue per order, not highest total revenue)\n");
+    prompt.push_str("- Prefer Avg or per-unit metrics over Sum when comparing groups of different sizes\n\n");
+    prompt.push_str("For each view and as standalone insights, use structured insight_kind + insight_params. Do NOT write specific numbers — they will be computed from data.\n\n");
     prompt.push_str("Required fields by view_type:\n");
     prompt.push_str("- BarChart/LineChart/BoxPlot: metric, group_by, aggregate\n");
     prompt.push_str("- ScatterPlot: x_col, y_col (both numeric)\n");
     prompt.push_str("- Histogram: metric\n");
     prompt.push_str("- Heatmap: x_col, y_col (both categorical), metric, aggregate\n");
     prompt.push_str("- CountBar/OrderedBar: group_by\n");
-    prompt.push_str("- BarChart with limit: metric, group_by, aggregate, sort, limit (for top-N)\n");
-    prompt.push_str("- Choropleth: metric, group_by (geographic column like state/country), aggregate\n");
+    prompt.push_str("- Choropleth: metric, group_by (geographic column), aggregate\n");
     prompt.push_str("Valid aggregate: Sum, Avg, Count, Min, Max\n\n");
+    prompt.push_str("insight_kind options:\n");
+    prompt.push_str("- top_value: {metric, group_by, aggregate} → \"X has highest Y\"\n");
+    prompt.push_str("- compare_two: {metric, group_by, aggregate} → \"X is N% higher than Y\"\n");
+    prompt.push_str("- distribution: {metric} → \"Y ranges from A to B\"\n");
+    prompt.push_str("- concentration: {metric, group_by, aggregate, n} → \"Top N account for P%\"\n");
+    prompt.push_str("- count: {column} → \"N unique values\"\n\n");
     prompt.push_str("Respond with ONLY valid JSON. Example:\n");
-    prompt.push_str(r#"{"suggested_views":[{"view_type":"BoxPlot","title":"Revenue spread by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight":"Widget Pro median $155 vs Gadget Plus $112"},{"view_type":"ScatterPlot","title":"Revenue vs quantity","x_col":"revenue","y_col":"quantity","insight":"Positive correlation r=0.7"}],"insights":["Top 3 products account for 78% of total revenue"]}"#);
-    prompt.push_str("\n\nONLY use column names from the dataset. Every insight MUST cite a number.\n");
+    prompt.push_str(r#"{"suggested_views":[{"view_type":"BoxPlot","title":"Revenue spread by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight_kind":"compare_two","insight_params":{"metric":"revenue","group_by":"product","aggregate":"Sum"}}],"insights":[{"kind":"concentration","params":{"metric":"revenue","group_by":"product","aggregate":"Sum","n":3}}]}"#);
+    prompt.push_str("\n\nONLY use column names from the dataset.\n");
     prompt.push_str("<end_of_turn>\n<start_of_turn>model\n");
 
     prompt
@@ -355,7 +532,7 @@ fn validate_ai_suggestion(s: &AiViewSuggestion, columns: &[ColumnMeta]) -> bool 
 
     // Check all referenced columns exist in dataset
     let refs: Vec<&Option<String>> = vec![
-        &s.metric, &s.group_by, &s.x_col, &s.y_col, &s.time_column,
+        &s.metric, &s.group_by, &s.x_col, &s.y_col,
     ];
     for col_ref in refs {
         if let Some(name) = col_ref {
@@ -372,7 +549,8 @@ fn validate_ai_suggestion(s: &AiViewSuggestion, columns: &[ColumnMeta]) -> bool 
 pub fn parse_ai_response(raw: &str, columns: &[ColumnMeta]) -> Result<AiInsightsResponse, String> {
     let json_str = extract_json(raw);
 
-    let mut response = serde_json::from_str::<AiInsightsResponse>(&json_str).map_err(|e| {
+    // Try parsing as RawAiResponse first (handles structured insights)
+    let raw_response = serde_json::from_str::<RawAiResponse>(&json_str).map_err(|e| {
         format!(
             "Failed to parse AI response as JSON: {}. Raw output: {}",
             e,
@@ -380,36 +558,56 @@ pub fn parse_ai_response(raw: &str, columns: &[ColumnMeta]) -> Result<AiInsights
         )
     })?;
 
+    // Convert RawInsights to plain strings (structured ones get a placeholder that realize_all_insights fills)
+    let insights: Vec<String> = raw_response.insights.into_iter().filter_map(|i| {
+        match i {
+            RawInsight::Plain(s) => Some(s),
+            RawInsight::Structured(ai) => ai.text,
+        }
+    }).collect();
+
+    let mut response = AiInsightsResponse {
+        suggested_views: raw_response.suggested_views,
+        insights,
+    };
+
     response.suggested_views.retain(|s| validate_ai_suggestion(s, columns));
 
     Ok(response)
 }
 
-/// Extract JSON from model output, stripping markdown fences if present.
+/// Replace structured insight_kind/insight_params with realized text on all views.
+fn realize_all_insights(response: &mut AiInsightsResponse, sample_rows: &[Vec<String>], columns: &[ColumnMeta]) {
+    for view in &mut response.suggested_views {
+        if let (Some(kind), Some(params)) = (&view.insight_kind, &view.insight_params) {
+            if let Some(realized) = realize_insight(kind, params, sample_rows, columns) {
+                view.insight = Some(realized);
+            }
+        }
+        // If no insight_kind but insight is present, keep the free text (fallback)
+    }
+}
+
+/// Extract JSON from model output, stripping markdown fences and prefix text.
+/// Uses serde's streaming deserializer to find the first valid JSON object.
 fn extract_json(raw: &str) -> String {
     let trimmed = raw.trim();
 
-    // Check for ```json ... ``` wrapping
-    if let Some(start) = trimmed.find('{') {
-        // Find matching closing brace
-        let mut depth = 0;
-        let mut end = start;
-        for (i, ch) in trimmed[start..].char_indices() {
-            match ch {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = start + i + 1;
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        trimmed[start..end].to_string()
+    // Find the first '{' — skip markdown fences, prefix text, etc.
+    let start = match trimmed.find('{') {
+        Some(i) => i,
+        None => return trimmed.to_string(),
+    };
+
+    let json_candidate = &trimmed[start..];
+
+    // Use serde's streaming deserializer to parse exactly one JSON value
+    let mut de = serde_json::Deserializer::from_str(json_candidate).into_iter::<serde_json::Value>();
+    if let Some(Ok(val)) = de.next() {
+        val.to_string()
     } else {
-        trimmed.to_string()
+        // Fallback: return from first '{' to end (let caller handle the error)
+        json_candidate.to_string()
     }
 }
 
@@ -459,6 +657,7 @@ pub async fn generate_ai_insights(
         row_count: parsed.row_count,
         columns: parsed.columns.clone(),
         summaries,
+        sample_rows: parsed.sample_rows.clone(),
         current_views: parsed
             .suggestions
             .iter()
@@ -534,6 +733,11 @@ mod tests {
                     numeric_stats: None,
                     date_range: None,
                 },
+            ],
+            sample_rows: vec![
+                vec!["2024-01-01".into(), "1200.50".into(), "Widget".into()],
+                vec!["2024-01-02".into(), "3400.00".into(), "Gadget".into()],
+                vec!["2024-01-03".into(), "800.00".into(), "Widget".into()],
             ],
             current_views: vec![
                 "Revenue".to_string(),
@@ -702,22 +906,38 @@ mod tests {
         assert!(result.unwrap_err().contains("not loaded"));
     }
 
+    fn parse_json(s: &str) -> serde_json::Value {
+        serde_json::from_str(s).unwrap()
+    }
+
     #[test]
     fn test_extract_json_plain() {
         let input = r#"{"a": 1}"#;
-        assert_eq!(extract_json(input), r#"{"a": 1}"#);
+        assert_eq!(parse_json(&extract_json(input)), parse_json(r#"{"a": 1}"#));
     }
 
     #[test]
     fn test_extract_json_with_prefix() {
         let input = "Here is the JSON:\n{\"a\": 1}";
-        assert_eq!(extract_json(input), r#"{"a": 1}"#);
+        assert_eq!(parse_json(&extract_json(input)), parse_json(r#"{"a": 1}"#));
     }
 
     #[test]
     fn test_extract_json_nested() {
         let input = r#"{"outer": {"inner": 1}}"#;
-        assert_eq!(extract_json(input), r#"{"outer": {"inner": 1}}"#);
+        assert_eq!(parse_json(&extract_json(input)), parse_json(r#"{"outer": {"inner": 1}}"#));
+    }
+
+    #[test]
+    fn test_extract_json_with_trailing_text() {
+        let input = r#"{"a": 1} some trailing garbage"#;
+        assert_eq!(parse_json(&extract_json(input)), parse_json(r#"{"a": 1}"#));
+    }
+
+    #[test]
+    fn test_extract_json_markdown_fence() {
+        let input = "```json\n{\"a\": 1}\n```";
+        assert_eq!(parse_json(&extract_json(input)), parse_json(r#"{"a": 1}"#));
     }
 
     #[test]
@@ -751,6 +971,7 @@ mod tests {
             row_count: 10000,
             columns,
             summaries,
+            sample_rows,
             current_views: vec![],
         };
         let prompt = build_prompt(&ctx);
@@ -762,5 +983,96 @@ mod tests {
         assert!(prompt.contains("Subscription Date"), "Temporal columns should be in prompt");
         // Rough size check: prompt should be under 3000 chars (~750 tokens)
         assert!(prompt.len() < 3000, "Prompt too long: {} chars", prompt.len());
+    }
+
+    // --- realize_insight tests ---
+
+    fn test_rows() -> Vec<Vec<String>> {
+        vec![
+            vec!["2024-01-01".into(), "100.00".into(), "Widget".into()],
+            vec!["2024-01-02".into(), "200.00".into(), "Widget".into()],
+            vec!["2024-01-03".into(), "150.00".into(), "Gadget".into()],
+            vec!["2024-01-04".into(), "50.00".into(), "Gadget".into()],
+        ]
+    }
+
+    fn test_col_metas() -> Vec<ColumnMeta> {
+        vec![
+            ColumnMeta { name: "date".into(), col_type: ColumnType::Temporal, unique_count: 4, total_count: 4, sample_values: vec![] },
+            ColumnMeta { name: "revenue".into(), col_type: ColumnType::NumericMeasure, unique_count: 4, total_count: 4, sample_values: vec![] },
+            ColumnMeta { name: "product".into(), col_type: ColumnType::Categorical, unique_count: 2, total_count: 4, sample_values: vec![] },
+        ]
+    }
+
+    #[test]
+    fn test_realize_top_value() {
+        let params = serde_json::json!({"metric": "revenue", "group_by": "product", "aggregate": "Sum"});
+        let result = realize_insight("top_value", &params, &test_rows(), &test_col_metas());
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("Widget"), "Should identify Widget as top: {}", text);
+        assert!(text.contains("300"), "Widget sum should be 300: {}", text);
+    }
+
+    #[test]
+    fn test_realize_compare_two() {
+        let params = serde_json::json!({"metric": "revenue", "group_by": "product", "aggregate": "Sum"});
+        let result = realize_insight("compare_two", &params, &test_rows(), &test_col_metas());
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("Widget"), "{}", text);
+        assert!(text.contains("Gadget"), "{}", text);
+        assert!(text.contains("50%"), "300 is 50% more than 200: {}", text);
+    }
+
+    #[test]
+    fn test_realize_distribution() {
+        let params = serde_json::json!({"metric": "revenue"});
+        let result = realize_insight("distribution", &params, &test_rows(), &test_col_metas());
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("50"), "Min should be 50: {}", text);
+        assert!(text.contains("200"), "Max should be 200: {}", text);
+        assert!(text.contains("125"), "Mean should be 125: {}", text);
+    }
+
+    #[test]
+    fn test_realize_concentration() {
+        let params = serde_json::json!({"metric": "revenue", "group_by": "product", "aggregate": "Sum", "n": 1});
+        let result = realize_insight("concentration", &params, &test_rows(), &test_col_metas());
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("60%"), "Widget (300/500) = 60%: {}", text);
+    }
+
+    #[test]
+    fn test_realize_count() {
+        let params = serde_json::json!({"column": "product"});
+        let result = realize_insight("count", &params, &test_rows(), &test_col_metas());
+        assert!(result.is_some());
+        let text = result.unwrap();
+        assert!(text.contains("2"), "Should have 2 unique products: {}", text);
+    }
+
+    #[test]
+    fn test_realize_invalid_column() {
+        let params = serde_json::json!({"metric": "nonexistent", "group_by": "product", "aggregate": "Sum"});
+        let result = realize_insight("top_value", &params, &test_rows(), &test_col_metas());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_realize_unknown_kind() {
+        let params = serde_json::json!({});
+        let result = realize_insight("unknown_kind", &params, &test_rows(), &test_col_metas());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fmt_num_commas() {
+        assert_eq!(fmt_num(245000.0), "245,000");
+        assert_eq!(fmt_num(1200.50), "1,200.50");
+        assert_eq!(fmt_num(42.0), "42");
+        assert_eq!(fmt_num(3.14), "3.14");
     }
 }

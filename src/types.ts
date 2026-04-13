@@ -47,7 +47,6 @@ export interface ViewSuggestion {
   suggested_by: string;
   insight: string | null;
   insight_edited: boolean;
-  time_column: string | null;
 }
 
 export interface ParsedCSV {
@@ -69,8 +68,9 @@ export interface AiViewSuggestion {
   metric: string | null;
   group_by: string | null;
   aggregate: string | null;
-  time_column: string | null;
   insight: string | null;
+  insight_kind: string | null;
+  insight_params: Record<string, unknown> | null;
   x_col: string | null;
   y_col: string | null;
   sort: string | null;
