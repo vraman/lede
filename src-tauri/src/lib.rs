@@ -5,7 +5,7 @@ pub mod model_manager;
 pub mod suggester;
 
 use ai_insights::{generate_ai_insights, InsightEngine};
-use commands::{add_recent_file, get_recent_files, parse_csv};
+use commands::{add_recent_file, create_duckdb, get_recent_files, load_csv_into_duckdb, parse_csv, query_duckdb, DuckDbState};
 use model_manager::{check_model_status, start_model_download, ModelManager};
 use std::sync::Arc;
 use tauri::Manager;
@@ -24,6 +24,7 @@ pub fn run() {
                 .expect("Failed to get app data dir");
             app.manage(Arc::new(ModelManager::new(data_dir)));
             app.manage(Arc::new(Mutex::new(InsightEngine::new())));
+            app.manage(Arc::new(Mutex::new(create_duckdb())) as DuckDbState);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -32,7 +33,9 @@ pub fn run() {
             add_recent_file,
             check_model_status,
             start_model_download,
-            generate_ai_insights
+            generate_ai_insights,
+            load_csv_into_duckdb,
+            query_duckdb
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

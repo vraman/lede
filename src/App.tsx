@@ -542,6 +542,13 @@ function App() {
 
         {error && <p className="error">{error}</p>}
 
+        {!aiEnabled && (
+          <AiOptIn onEnabled={() => {
+            setAiEnabled(true);
+            if (sourcePath) requestAiInsights(sourcePath);
+          }} />
+        )}
+
         <div className="editor-layout">
           <ProseEditor
             initialContent={editorContent}
@@ -550,12 +557,6 @@ function App() {
               editorInstanceRef.current = editor;
             }}
           />
-          {!aiEnabled && (
-            <AiOptIn onEnabled={() => {
-              setAiEnabled(true);
-              if (sourcePath) requestAiInsights(sourcePath);
-            }} />
-          )}
           <DataTable data={data} />
         </div>
       </main>
