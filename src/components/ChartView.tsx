@@ -214,11 +214,13 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
       limit?: number | null,
     ): Promise<Record<string, string | number>[]> {
       if (isDuckLoaded()) {
-        const aggFn = aggType === "Avg" ? "AVG" : aggType === "Count" ? "COUNT" : aggType === "Min" ? "MIN" : aggType === "Max" ? "MAX" : "SUM";
-        const limitClause = limit ? `LIMIT ${limit}` : "";
-        const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv WHERE "${metric}" IS NOT NULL GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
-        const rows = await duckQuery(sql);
-        return rows as Record<string, string | number>[];
+        try {
+          const aggFn = aggType === "Avg" ? "AVG" : aggType === "Count" ? "COUNT" : aggType === "Min" ? "MIN" : aggType === "Max" ? "MAX" : "SUM";
+          const limitClause = limit ? `LIMIT ${limit}` : "";
+          const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv WHERE "${metric}" IS NOT NULL GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
+          const rows = await duckQuery(sql);
+          return rows as Record<string, string | number>[];
+        } catch { /* fall through to sample rows */ }
       }
       // Fallback to sample rows
       const rows = buildRows(data);
@@ -230,8 +232,10 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
 
     async function queryCount(groupBy: string): Promise<Record<string, string | number>[]> {
       if (isDuckLoaded()) {
-        const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv WHERE "${groupBy}" IS NOT NULL AND "${groupBy}" != '' GROUP BY "${groupBy}" ORDER BY count DESC`;
-        return await duckQuery(sql) as Record<string, string | number>[];
+        try {
+          const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv WHERE "${groupBy}" IS NOT NULL AND "${groupBy}" != '' GROUP BY "${groupBy}" ORDER BY count DESC`;
+          return await duckQuery(sql) as Record<string, string | number>[];
+        } catch { /* fall through */ }
       }
       return countByGroup(buildRows(data), groupBy);
     }

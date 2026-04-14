@@ -123,6 +123,7 @@ function App() {
   const [aiEnabled, setAiEnabled] = useState(isAiEnabled());
   const aiCancelledRef = useRef(false);
   const [allSuggestions, setAllSuggestions] = useState<ViewSuggestion[]>([]);
+  const [duckDbReady, setDuckDbReady] = useState(false);
 
   const handleFilePick = useCallback(async () => {
     try {
@@ -168,9 +169,11 @@ function App() {
       invoke("add_recent_file", { path, title: name }).catch(() => {});
 
       // Load CSV into DuckDB for full-dataset aggregation
+      setDuckDbReady(false);
       const t2 = performance.now();
       loadDuckDB(path).then(() => {
         console.log(`[perf] DuckDB load: ${(performance.now() - t2).toFixed(0)}ms`);
+        setDuckDbReady(true);
       }).catch((e) => {
         console.error(`[perf] DuckDB load failed: ${e}`);
       });
@@ -281,17 +284,19 @@ function App() {
             aiSwapMap.set(combo, alt);
           }
 
-          // Walk editor nodes and swap matching Phase 1 views to AI view type
+          // Walk editor nodes — add AI insight to matching Phase 1 views
+          // but do NOT swap the view type or config (that was breaking charts)
           editor.state.doc.descendants((node, pos) => {
             if (node.type.name === "dataview") {
               const vc = node.attrs.viewConfig;
               if (vc && vc.suggested_by !== "ai") {
                 const combo = `${vc.metric || ""}|${vc.group_by || ""}`;
                 const aiAlt = aiSwapMap.get(combo);
-                if (aiAlt) {
-                  // Swap to AI view type, keeping insight and AI badge
+                if (aiAlt && aiAlt.insight) {
+                  // Only add the AI insight, keep everything else
                   const tr = editor.state.tr.setNodeAttribute(pos, "viewConfig", {
-                    ...aiAlt,
+                    ...vc,
+                    insight: aiAlt.insight,
                   });
                   editor.view.dispatch(tr);
                 }
@@ -575,7 +580,7 @@ function App() {
             }}
           />
           {aiEnabled && <QueryBar />}
-          <DataTable data={data} />
+          <DataTable data={data} duckDbReady={duckDbReady} />
         </div>
       </main>
     </DataContext.Provider>

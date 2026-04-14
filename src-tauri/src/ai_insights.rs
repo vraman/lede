@@ -560,10 +560,11 @@ pub fn build_prompt(context: &CsvContext) -> String {
     prompt.push_str("\n## Task:\n");
     prompt.push_str("Suggest 1-3 NEW visualizations NOT already shown.\n");
     prompt.push_str("Focus on NON-OBVIOUS findings. Skip things that are trivially true:\n");
-    prompt.push_str("- Do NOT suggest scatter plots between metrics that are mathematically related (e.g. revenue vs orders, price vs total)\n");
-    prompt.push_str("- Do NOT state that a larger group has a larger total — that's obvious\n");
-    prompt.push_str("- DO look for: outliers, uneven distributions, surprising category leaders, unexpected ratios (e.g. highest revenue per order, not highest total revenue)\n");
-    prompt.push_str("- Prefer Avg or per-unit metrics over Sum when comparing groups of different sizes\n\n");
+    prompt.push_str("- Do NOT suggest scatter plots between metrics that are mathematically related\n");
+    prompt.push_str("- Do NOT state that a larger group has a larger total\n");
+    prompt.push_str("- DO look for: outliers, uneven distributions, surprising category leaders, unexpected per-unit ratios\n");
+    prompt.push_str("- Prefer Avg over Sum when comparing groups of different sizes\n");
+    prompt.push_str("- ONLY use column names listed above. Do NOT invent column names.\n\n");
     prompt.push_str("For each view and as standalone insights, use structured insight_kind + insight_params. Do NOT write specific numbers — they will be computed from data.\n\n");
     prompt.push_str("Required fields by view_type:\n");
     prompt.push_str("- BarChart/LineChart/BoxPlot: metric, group_by, aggregate\n");

@@ -4,6 +4,7 @@ let loaded = false;
 
 /** Load a CSV file into DuckDB (Rust backend). */
 export async function loadCSV(path: string): Promise<void> {
+  loaded = false; // Reset while loading new file
   await invoke("load_csv_into_duckdb", { path });
   loaded = true;
 }
