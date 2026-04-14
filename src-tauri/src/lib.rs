@@ -4,7 +4,7 @@ pub mod commands;
 pub mod model_manager;
 pub mod suggester;
 
-use ai_insights::{generate_ai_insights, InsightEngine};
+use ai_insights::{generate_ai_insights, natural_language_to_sql, InsightEngine};
 use commands::{add_recent_file, create_duckdb, get_recent_files, load_csv_into_duckdb, parse_csv, query_duckdb, DuckDbState};
 use model_manager::{check_model_status, start_model_download, ModelManager};
 use std::sync::Arc;
@@ -35,7 +35,8 @@ pub fn run() {
             start_model_download,
             generate_ai_insights,
             load_csv_into_duckdb,
-            query_duckdb
+            query_duckdb,
+            natural_language_to_sql
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

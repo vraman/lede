@@ -362,11 +362,10 @@ impl InsightEngine {
         self.model.is_some()
     }
 
-    pub fn generate(&self, context: &CsvContext) -> Result<AiInsightsResponse, String> {
+    /// Run a prompt through the model and return raw text output.
+    fn run_prompt(&self, prompt: &str) -> Result<String, String> {
         let model = self.model.as_ref().ok_or("Model not loaded")?;
         let backend = self.backend.as_ref().ok_or("Backend not initialized")?;
-
-        let prompt = build_prompt(context);
 
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE));
@@ -375,21 +374,18 @@ impl InsightEngine {
             .new_context(backend, ctx_params)
             .map_err(|e| format!("Failed to create context: {}", e))?;
 
-        // Tokenize the prompt
         let tokens = model
-            .str_to_token(&prompt, AddBos::Always)
+            .str_to_token(prompt, AddBos::Always)
             .map_err(|e| format!("Tokenization failed: {}", e))?;
 
-        // Leave room for generation (at least 256 tokens)
         let max_prompt_tokens = CONTEXT_SIZE as usize - 256;
         if tokens.len() > max_prompt_tokens {
             return Err(format!(
-                "Prompt too long ({} tokens, max {}). Dataset has too many columns for AI analysis.",
+                "Prompt too long ({} tokens, max {}).",
                 tokens.len(), max_prompt_tokens
             ));
         }
 
-        // Create batch and add prompt tokens
         let mut batch = LlamaBatch::new(CONTEXT_SIZE as usize, 1);
         let last_idx = tokens.len() - 1;
         for (i, &token) in tokens.iter().enumerate() {
@@ -398,41 +394,32 @@ impl InsightEngine {
                 .map_err(|e| format!("Failed to add token to batch: {}", e))?;
         }
 
-        // Decode prompt
         ctx.decode(&mut batch)
             .map_err(|e| format!("Prompt decode failed: {}", e))?;
 
-        // Set up sampler — temperature + greedy for structured output
         let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(0.3),
+            LlamaSampler::temp(0.1),
             LlamaSampler::greedy(),
         ]);
 
-        // Generate tokens
         let mut output_tokens = Vec::new();
         let mut n_cur = tokens.len();
 
         for _ in 0..MAX_GENERATE_TOKENS {
             let new_token = sampler.sample(&ctx, batch.n_tokens() - 1);
-
             if model.is_eog_token(new_token) {
                 break;
             }
-
             output_tokens.push(new_token);
-
-            // Prepare next batch
             batch.clear();
             batch
                 .add(new_token, n_cur as i32, &[0], true)
                 .map_err(|e| format!("Failed to add generated token: {}", e))?;
             n_cur += 1;
-
             ctx.decode(&mut batch)
                 .map_err(|e| format!("Decode failed: {}", e))?;
         }
 
-        // Convert tokens to text
         let mut output = String::new();
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         for token in &output_tokens {
@@ -442,10 +429,35 @@ impl InsightEngine {
             output.push_str(&piece);
         }
 
-        // Parse JSON from output, then realize structured insights with actual data
+        Ok(output)
+    }
+
+    pub fn generate(&self, context: &CsvContext) -> Result<AiInsightsResponse, String> {
+        let prompt = build_prompt(context);
+        let output = self.run_prompt(&prompt)?;
         let mut response = parse_ai_response(&output, &context.columns)?;
         realize_all_insights(&mut response, &context.sample_rows, &context.columns);
         Ok(response)
+    }
+
+    pub fn generate_sql(&self, question: &str, columns: &[String], table_name: &str) -> Result<String, String> {
+        let mut prompt = String::new();
+        prompt.push_str("<start_of_turn>user\n");
+        prompt.push_str("Translate this question to a DuckDB SQL query.\n\n");
+        prompt.push_str(&format!("Table: {}\nColumns: {}\n\n", table_name, columns.join(", ")));
+        prompt.push_str(&format!("Question: {}\n\n", question));
+        prompt.push_str("Respond with ONLY the SQL query, no explanation, no markdown.\n");
+        prompt.push_str("<end_of_turn>\n<start_of_turn>model\n");
+
+        let output = self.run_prompt(&prompt)?;
+        // Clean up: strip markdown fences, whitespace
+        let sql = output.trim()
+            .trim_start_matches("```sql")
+            .trim_start_matches("```")
+            .trim_end_matches("```")
+            .trim()
+            .to_string();
+        Ok(sql)
     }
 }
 
@@ -728,6 +740,21 @@ pub async fn generate_ai_insights(
         Ok(response) => Ok(response),
         Err(e) => Err(format!("AI inference failed: {}", e)),
     }
+}
+
+#[tauri::command]
+pub async fn natural_language_to_sql(
+    question: String,
+    columns: Vec<String>,
+    table_name: String,
+    app: AppHandle,
+) -> Result<String, String> {
+    let engine = app.state::<Arc<Mutex<InsightEngine>>>();
+    let engine = engine.lock().await;
+    if !engine.is_loaded() {
+        return Err("AI model not loaded".to_string());
+    }
+    tokio::task::block_in_place(|| engine.generate_sql(&question, &columns, &table_name))
 }
 
 #[cfg(test)]

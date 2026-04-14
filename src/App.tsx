@@ -10,6 +10,7 @@ import ProseEditor from "./components/ProseEditor";
 import DataTable from "./components/DataTable";
 import HomeScreen from "./components/HomeScreen";
 import AiOptIn, { isAiEnabled } from "./components/AiOptIn";
+import QueryBar from "./components/QueryBar";
 import { loadCSV as loadDuckDB } from "./duckdb";
 import {
   serializeFromEditor,
@@ -557,6 +558,7 @@ function App() {
               editorInstanceRef.current = editor;
             }}
           />
+          {aiEnabled && <QueryBar />}
           <DataTable data={data} />
         </div>
       </main>
