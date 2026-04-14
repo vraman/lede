@@ -149,8 +149,12 @@ function App() {
   const loadCSV = async (path: string) => {
     setLoading(true);
     setError(null);
+    const t0 = performance.now();
     try {
       const result = await invoke<ParsedCSV>("parse_csv", { path });
+      console.log(`[perf] parse_csv: ${(performance.now() - t0).toFixed(0)}ms`);
+
+      const t1 = performance.now();
       setData(result);
       setSourcePath(path);
       const name = path.split("/").pop()?.replace(".csv", "") || "Untitled";
@@ -159,19 +163,30 @@ function App() {
       setAllSuggestions(result.suggestions);
       metaRef.current = null;
       setSavePath("");
+      console.log(`[perf] setState: ${(performance.now() - t1).toFixed(0)}ms`);
+
       invoke("add_recent_file", { path, title: name }).catch(() => {});
 
       // Load CSV into DuckDB for full-dataset aggregation
-      loadDuckDB(path).catch(() => {});
+      const t2 = performance.now();
+      loadDuckDB(path).then(() => {
+        console.log(`[perf] DuckDB load: ${(performance.now() - t2).toFixed(0)}ms`);
+      }).catch((e) => {
+        console.error(`[perf] DuckDB load failed: ${e}`);
+      });
 
       // Phase 2: Request AI insights asynchronously (only if enabled)
       if (aiEnabled) {
-        requestAiInsights(path);
+        const t3 = performance.now();
+        requestAiInsights(path).then(() => {
+          console.log(`[perf] AI insights: ${(performance.now() - t3).toFixed(0)}ms`);
+        });
       }
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
+      console.log(`[perf] total loadCSV: ${(performance.now() - t0).toFixed(0)}ms`);
     }
   };
 

@@ -22,9 +22,26 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("Failed to get app data dir");
-            app.manage(Arc::new(ModelManager::new(data_dir)));
-            app.manage(Arc::new(Mutex::new(InsightEngine::new())));
+            let model_mgr = Arc::new(ModelManager::new(data_dir));
+            let engine = Arc::new(Mutex::new(InsightEngine::new()));
+            app.manage(model_mgr.clone());
+            app.manage(engine.clone());
             app.manage(Arc::new(Mutex::new(create_duckdb())) as DuckDbState);
+
+            // Preload AI model in background if already downloaded
+            if model_mgr.is_downloaded() {
+                let model_path = model_mgr.model_path();
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        let mut engine = engine.lock().await;
+                        if let Err(e) = engine.load_model(&model_path) {
+                            eprintln!("Background model preload failed: {}", e);
+                        }
+                    });
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
