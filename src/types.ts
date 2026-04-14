@@ -29,7 +29,8 @@ export type ViewType =
   | "BoxPlot"
   | "OrderedBar"
   | "MultiLineChart"
-  | "Choropleth";
+  | "Choropleth"
+  | "PointMap";
 
 export type Aggregate = "Sum" | "Avg" | "Count" | "Min" | "Max";
 

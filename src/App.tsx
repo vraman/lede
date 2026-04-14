@@ -49,7 +49,7 @@ function buildInitialDoc(suggestions: ViewSuggestion[]): JSONContent {
 
 const VALID_VIEW_TYPES = new Set<string>([
   "Table", "SummaryCard", "LineChart", "BarChart", "CountBar",
-  "ScatterPlot", "Histogram", "Heatmap", "OrderedBar", "MultiLineChart",
+  "ScatterPlot", "Histogram", "Heatmap", "OrderedBar", "MultiLineChart", "PointMap",
   "Choropleth",
 ]);
 
@@ -75,6 +75,7 @@ function normalizeViewType(raw: string): ViewSuggestion["view_type"] {
     rankedlist: "BarChart",
     multilinechart: "MultiLineChart",
     choropleth: "Choropleth",
+    pointmap: "PointMap",
   };
   return map[lower] || "BarChart";
 }

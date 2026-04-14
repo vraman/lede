@@ -27,6 +27,8 @@ const ORDINAL_ORDERS: Record<string, string[]> = {
   likelihood_to_recommend: ["Never", "Rarely", "Sometimes", "Often", "Always"],
 };
 
+const ACCENT_COLOR = "#7c3aed";
+
 const NUMERIC_TYPES = new Set([
   "NumericMeasure",
   "NumericRatio",
@@ -160,6 +162,7 @@ const VIEW_TYPE_LABELS: Record<string, string> = {
   BoxPlot: "Box Plot",
   Heatmap: "Heatmap",
   Choropleth: "Map",
+  PointMap: "Points",
 };
 
 export default function ChartView({ data, suggestion, alternatives = [], onSwap, onChangeAggregate }: Props) {
@@ -168,17 +171,22 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
   const geoCacheRef = useRef<GeoCache>({ data: null, key: "" });
   const [geoData, setGeoData] = useState<unknown>(null);
 
-  // Async geo data loading for Choropleth
+  // Async geo data loading for Choropleth and PointMap
   useEffect(() => {
-    if (suggestion.view_type !== "Choropleth") return;
-    const geoCol = suggestion.group_by;
-    if (!geoCol) return;
+    if (suggestion.view_type !== "Choropleth" && suggestion.view_type !== "PointMap") return;
 
-    const sampleValues = data.sample_rows.slice(0, 20).map(
-      (row) => row[data.columns.findIndex((c) => c.name === geoCol)] || ""
-    );
-    const isUS = looksLikeUSStates(sampleValues);
-    const url = isUS ? "/geo/us-states-10m.json" : "/geo/countries-110m.json";
+    let url: string;
+    if (suggestion.view_type === "PointMap") {
+      url = "/geo/countries-110m.json";
+    } else {
+      const geoCol = suggestion.group_by;
+      if (!geoCol) return;
+      const sampleValues = data.sample_rows.slice(0, 20).map(
+        (row) => row[data.columns.findIndex((c) => c.name === geoCol)] || ""
+      );
+      const isUS = looksLikeUSStates(sampleValues);
+      url = isUS ? "/geo/us-states-10m.json" : "/geo/countries-110m.json";
+    }
 
     if (geoCacheRef.current.key === url && geoCacheRef.current.data) {
       setGeoData(geoCacheRef.current.data);
@@ -459,6 +467,43 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
                 strokeWidth: 0.5,
               }),
               Plot.geo(meshData, { stroke: "white", strokeWidth: 0.5, fill: "none" }),
+            ],
+          });
+          break;
+        }
+
+        case "PointMap": {
+          if (!geoData) break;
+          const lngCol = suggestion.x_col;
+          const latCol = suggestion.y_col;
+          if (!lngCol || !latCol) break;
+
+          // Get raw lat/lng values from DuckDB
+          let pointRows: Record<string, unknown>[];
+          if (isDuckLoaded()) {
+            pointRows = await duckQuery(
+              `SELECT "${lngCol}", "${latCol}" FROM csv WHERE "${lngCol}" IS NOT NULL AND "${latCol}" IS NOT NULL LIMIT 5000`
+            );
+          } else {
+            pointRows = rows.filter((r) => r[lngCol] != null && r[latCol] != null) as Record<string, unknown>[];
+          }
+
+          const topo = geoData as Topology;
+          const landKey = Object.keys(topo.objects).find(k => k === "land") || Object.keys(topo.objects)[0];
+          const land = topojson.feature(topo, topo.objects[landKey]) as unknown as GeoJSON.FeatureCollection;
+
+          chart = Plot.plot({
+            projection: "equirectangular",
+            height: 300,
+            marks: [
+              Plot.geo(land, { fill: "#f0f0f0", stroke: "#ddd" }),
+              Plot.dot(pointRows, {
+                x: lngCol,
+                y: latCol,
+                fill: ACCENT_COLOR,
+                r: 2.5,
+                opacity: 0.6,
+              }),
             ],
           });
           break;
