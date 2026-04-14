@@ -15,6 +15,7 @@ pub enum ViewType {
     OrderedBar,
     MultiLineChart,
     Choropleth,
+    PointMap,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -83,6 +84,9 @@ fn humanize_title(
             let m = capitalize(metric.unwrap_or("value"));
             let g = group_by.unwrap_or("region");
             format!("{} by {}", m, prettify(g))
+        }
+        ViewType::PointMap => {
+            "Locations".to_string()
         }
         _ => {
             // LineChart, BarChart, etc.
@@ -265,7 +269,31 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
         }
     }
 
-    // 6. Scatter plot (first two numerics)
+    // 6. Point map for lat/lng pairs
+    let lat_names = ["lat", "latitude"];
+    let lng_names = ["lng", "lon", "longitude"];
+    let lat_col = columns.iter().find(|c| lat_names.contains(&c.name.to_lowercase().as_str()));
+    let lng_col = columns.iter().find(|c| lng_names.contains(&c.name.to_lowercase().as_str()));
+    if let (Some(lat), Some(lng)) = (lat_col, lng_col) {
+        suggestions.push(ViewSuggestion {
+            view_type: ViewType::PointMap,
+            title: "Locations".to_string(),
+            metric: None,
+            group_by: None,
+            aggregate: Aggregate::Count,
+            sort: None,
+            limit: None,
+            x_col: Some(lng.name.clone()),
+            y_col: Some(lat.name.clone()),
+            shown_by_default: false,
+            suggested_by: "rule".to_string(),
+            insight: None,
+            insight_edited: false,
+            denominator: None,
+        });
+    }
+
+    // 7. Scatter plot (first two numerics)
     if numerics.len() >= 2 {
         let title = humanize_title(&ViewType::ScatterPlot, None, None, Some(&numerics[0].name), Some(&numerics[1].name), false);
         suggestions.push(ViewSuggestion {

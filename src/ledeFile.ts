@@ -249,6 +249,7 @@ function viewTypeToString(vt: string): string {
     // RankedList removed — BarChart with limit handles this
     MultiLineChart: "multi_line_chart",
     Choropleth: "choropleth",
+    PointMap: "point_map",
   };
   return map[vt] || vt.toLowerCase();
 }
@@ -266,6 +267,7 @@ function stringToViewType(s: string): string {
     box_plot: "BoxPlot",
     ordered_bar: "OrderedBar",
     ranked_list: "BarChart",
+    point_map: "PointMap",
     multi_line_chart: "MultiLineChart",
     choropleth: "Choropleth",
   };
