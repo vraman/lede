@@ -2,11 +2,13 @@ pub mod ai_insights;
 pub mod classifier;
 pub mod commands;
 pub mod model_manager;
+pub mod query_engine;
 pub mod suggester;
 
 use ai_insights::{generate_ai_insights, natural_language_to_sql, InsightEngine};
 use commands::{add_recent_file, create_duckdb, get_recent_files, load_csv_into_duckdb, parse_csv, query_duckdb, DuckDbState};
 use model_manager::{check_model_status, start_model_download, ModelManager};
+use query_engine::translate_query;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
@@ -53,7 +55,8 @@ pub fn run() {
             generate_ai_insights,
             load_csv_into_duckdb,
             query_duckdb,
-            natural_language_to_sql
+            natural_language_to_sql,
+            translate_query
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
