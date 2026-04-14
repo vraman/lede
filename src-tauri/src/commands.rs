@@ -157,46 +157,67 @@ pub async fn query_duckdb(
 ) -> Result<Vec<HashMap<String, serde_json::Value>>, String> {
     let db = app.state::<DuckDbState>();
     let conn = db.lock().await;
+
+    // Use Arrow interface to avoid the column_name panic in duckdb-rs
     let mut stmt = conn.prepare(&sql).map_err(|e| format!("SQL error: {}", e))?;
+    let arrow_result = stmt.query_arrow([]).map_err(|e| format!("Query failed: {}", e))?;
 
-    // Get column names before executing (from prepared statement metadata)
-    let column_count = stmt.column_count();
-    let column_names: Vec<String> = (0..column_count)
-        .map(|i| stmt.column_name(i).map_or("?".to_string(), |v| v.to_string()))
-        .collect();
-
-    // Execute and collect rows
-    let rows = stmt
-        .query_map([], |row| {
-            let mut map = HashMap::new();
-            for (i, name) in column_names.iter().enumerate() {
-                let val: duckdb::types::Value = row.get(i)?;
-                let json_val = match val {
-                    duckdb::types::Value::Null => serde_json::Value::Null,
-                    duckdb::types::Value::Boolean(b) => serde_json::Value::Bool(b),
-                    duckdb::types::Value::TinyInt(n) => serde_json::json!(n),
-                    duckdb::types::Value::SmallInt(n) => serde_json::json!(n),
-                    duckdb::types::Value::Int(n) => serde_json::json!(n),
-                    duckdb::types::Value::BigInt(n) => serde_json::json!(n),
-                    duckdb::types::Value::Float(n) => serde_json::json!(n),
-                    duckdb::types::Value::Double(n) => serde_json::json!(n),
-                    duckdb::types::Value::Text(s) => serde_json::Value::String(s),
-                    _ => serde_json::Value::String(format!("{:?}", val)),
-                };
-                map.insert(name.clone(), json_val);
-            }
-            Ok(map)
-        })
-        .map_err(|e| format!("Query failed: {}", e))?;
-
+    let batches: Vec<_> = arrow_result.collect();
     let mut result = Vec::new();
-    for row in rows {
-        match row {
-            Ok(map) => result.push(map),
-            Err(_) => continue, // skip bad rows
+
+    for batch in &batches {
+        let schema = batch.schema();
+        let num_rows = batch.num_rows();
+        let num_cols = batch.num_columns();
+
+        for row_idx in 0..num_rows {
+            let mut map = HashMap::new();
+            for col_idx in 0..num_cols {
+                let col_name = schema.field(col_idx).name().clone();
+                let col = batch.column(col_idx);
+                let val = arrow_col_to_json(col, row_idx);
+                map.insert(col_name, val);
+            }
+            result.push(map);
         }
     }
     Ok(result)
+}
+
+/// Convert an Arrow array value at a given index to a JSON value.
+fn arrow_col_to_json(col: &dyn duckdb::arrow::array::Array, idx: usize) -> serde_json::Value {
+    use duckdb::arrow::array::*;
+    use duckdb::arrow::datatypes::DataType;
+
+    if col.is_null(idx) {
+        return serde_json::Value::Null;
+    }
+
+    match col.data_type() {
+        DataType::Boolean => {
+            let arr = col.as_any().downcast_ref::<BooleanArray>().unwrap();
+            serde_json::Value::Bool(arr.value(idx))
+        }
+        DataType::Int8 => serde_json::json!(col.as_any().downcast_ref::<Int8Array>().unwrap().value(idx)),
+        DataType::Int16 => serde_json::json!(col.as_any().downcast_ref::<Int16Array>().unwrap().value(idx)),
+        DataType::Int32 => serde_json::json!(col.as_any().downcast_ref::<Int32Array>().unwrap().value(idx)),
+        DataType::Int64 => serde_json::json!(col.as_any().downcast_ref::<Int64Array>().unwrap().value(idx)),
+        DataType::UInt8 => serde_json::json!(col.as_any().downcast_ref::<UInt8Array>().unwrap().value(idx)),
+        DataType::UInt16 => serde_json::json!(col.as_any().downcast_ref::<UInt16Array>().unwrap().value(idx)),
+        DataType::UInt32 => serde_json::json!(col.as_any().downcast_ref::<UInt32Array>().unwrap().value(idx)),
+        DataType::UInt64 => serde_json::json!(col.as_any().downcast_ref::<UInt64Array>().unwrap().value(idx)),
+        DataType::Float32 => serde_json::json!(col.as_any().downcast_ref::<Float32Array>().unwrap().value(idx)),
+        DataType::Float64 => serde_json::json!(col.as_any().downcast_ref::<Float64Array>().unwrap().value(idx)),
+        DataType::Utf8 => {
+            let arr = col.as_any().downcast_ref::<StringArray>().unwrap();
+            serde_json::Value::String(arr.value(idx).to_string())
+        }
+        DataType::LargeUtf8 => {
+            let arr = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
+            serde_json::Value::String(arr.value(idx).to_string())
+        }
+        _ => serde_json::Value::String(format!("{:?}", col.data_type())),
+    }
 }
 
 #[cfg(test)]

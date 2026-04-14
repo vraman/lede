@@ -12,6 +12,7 @@ interface Props {
   alternatives?: ViewSuggestion[];
   onSwap?: (alt: ViewSuggestion) => void;
   onChangeAggregate?: (agg: ViewSuggestion["aggregate"]) => void;
+  duckDbReady?: boolean;
 }
 
 const ALL_AGGREGATES: ViewSuggestion["aggregate"][] = ["Sum", "Avg", "Min", "Max", "Count"];
@@ -165,7 +166,7 @@ const VIEW_TYPE_LABELS: Record<string, string> = {
   PointMap: "Points",
 };
 
-export default function ChartView({ data, suggestion, alternatives = [], onSwap, onChangeAggregate }: Props) {
+export default function ChartView({ data, suggestion, alternatives = [], onSwap, onChangeAggregate, duckDbReady }: Props) {
   const { sourceFilename } = useDataContext();
   const containerRef = useRef<HTMLDivElement>(null);
   const geoCacheRef = useRef<GeoCache>({ data: null, key: "" });
@@ -206,38 +207,24 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
     if (!containerRef.current) return;
     let cancelled = false;
 
-    /** Query DuckDB for aggregated data, fall back to sample rows. */
+    /** Query DuckDB for aggregated data. Returns empty if DuckDB not ready. */
     async function queryAgg(
       groupBy: string,
       metric: string,
       aggType: string,
       limit?: number | null,
     ): Promise<Record<string, string | number>[]> {
-      if (isDuckLoaded()) {
-        try {
-          const aggFn = aggType === "Avg" ? "AVG" : aggType === "Count" ? "COUNT" : aggType === "Min" ? "MIN" : aggType === "Max" ? "MAX" : "SUM";
-          const limitClause = limit ? `LIMIT ${limit}` : "";
-          const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv WHERE "${metric}" IS NOT NULL GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
-          const rows = await duckQuery(sql);
-          return rows as Record<string, string | number>[];
-        } catch { /* fall through to sample rows */ }
-      }
-      // Fallback to sample rows
-      const rows = buildRows(data);
-      let agg = aggregate(rows, groupBy, metric, aggType);
-      agg.sort((a, b) => Number(b[metric]) - Number(a[metric]));
-      if (limit) agg = agg.slice(0, limit);
-      return agg;
+      if (!isDuckLoaded()) return [];
+      const aggFn = aggType === "Avg" ? "AVG" : aggType === "Count" ? "COUNT" : aggType === "Min" ? "MIN" : aggType === "Max" ? "MAX" : "SUM";
+      const limitClause = limit ? `LIMIT ${limit}` : "";
+      const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv WHERE "${metric}" IS NOT NULL GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
+      return await duckQuery(sql) as Record<string, string | number>[];
     }
 
     async function queryCount(groupBy: string): Promise<Record<string, string | number>[]> {
-      if (isDuckLoaded()) {
-        try {
-          const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv WHERE "${groupBy}" IS NOT NULL AND "${groupBy}" != '' GROUP BY "${groupBy}" ORDER BY count DESC`;
-          return await duckQuery(sql) as Record<string, string | number>[];
-        } catch { /* fall through */ }
-      }
-      return countByGroup(buildRows(data), groupBy);
+      if (!isDuckLoaded()) return [];
+      const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv WHERE "${groupBy}" IS NOT NULL AND "${groupBy}" != '' GROUP BY "${groupBy}" ORDER BY count DESC`;
+      return await duckQuery(sql) as Record<string, string | number>[];
     }
 
     async function renderChart() {
@@ -534,7 +521,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
         containerRef.current.innerHTML = "";
       }
     };
-  }, [data, suggestion, geoData]);
+  }, [data, suggestion, geoData, duckDbReady]);
 
   const hasMetricAgg = suggestion.metric && suggestion.group_by
     && suggestion.view_type !== "CountBar"
