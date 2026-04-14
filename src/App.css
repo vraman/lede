@@ -557,6 +557,40 @@ body {
   overflow: hidden;
 }
 
+.table-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+}
+
+.table-pagination {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.table-page-btn {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.table-page-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.table-page-info {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
 .table-scroll {
   overflow-x: auto;
 }
