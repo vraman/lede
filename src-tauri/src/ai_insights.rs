@@ -76,6 +76,10 @@ pub struct AiViewSuggestion {
     #[serde(default)]
     pub insight: Option<String>,
     #[serde(default)]
+    pub filter_column: Option<String>,
+    #[serde(default)]
+    pub filter_value: Option<String>,
+    #[serde(default)]
     pub insight_kind: Option<String>,
     #[serde(default)]
     pub insight_params: Option<serde_json::Value>,
@@ -365,7 +369,7 @@ impl InsightEngine {
             LlamaBackend::init().map_err(|e| format!("Failed to init llama backend: {}", e))?;
 
         let model_params = LlamaModelParams::default();
-        let model_params = model_params.with_n_gpu_layers(999); // Offload all layers to Metal GPU
+        let model_params = model_params.with_n_gpu_layers(999); // Metal GPU — exit crash is cosmetic (no terminal in DMG)
 
         let model = LlamaModel::load_from_file(&backend, path, &model_params)
             .map_err(|e| format!("Failed to load model: {}", e))?;
@@ -587,7 +591,8 @@ pub fn build_prompt(context: &CsvContext) -> String {
     prompt.push_str("- Heatmap: x_col, y_col (both categorical), metric, aggregate\n");
     prompt.push_str("- CountBar/OrderedBar: group_by\n");
     prompt.push_str("- Choropleth: metric, group_by (geographic column), aggregate\n");
-    prompt.push_str("Valid aggregate: Sum, Avg, Count, Min, Max\n\n");
+    prompt.push_str("Valid aggregate: Sum, Avg, Count, Min, Max\n");
+    prompt.push_str("Optional: filter_column + filter_value to filter rows (e.g. filter_column=\"Topic\", filter_value=\"Cancer\" shows only cancer rows)\n\n");
     prompt.push_str("insight_kind options:\n");
     prompt.push_str("- top_value: {metric, group_by, aggregate} → \"X has highest Y\"\n");
     prompt.push_str("- compare_two: {metric, group_by, aggregate} → \"X is N% higher than Y\"\n");
@@ -644,7 +649,7 @@ fn validate_ai_suggestion(s: &AiViewSuggestion, columns: &[ColumnMeta]) -> bool 
 
     // Check all referenced columns exist in dataset
     let refs: Vec<&Option<String>> = vec![
-        &s.metric, &s.group_by, &s.x_col, &s.y_col,
+        &s.metric, &s.group_by, &s.x_col, &s.y_col, &s.filter_column,
     ];
     for col_ref in refs {
         if let Some(name) = col_ref {
@@ -1141,7 +1146,7 @@ mod tests {
         assert!(prompt.contains("Country"), "Geographic columns should be in prompt");
         assert!(prompt.contains("Subscription Date"), "Temporal columns should be in prompt");
         // Rough size check: prompt should be under 3000 chars (~750 tokens)
-        assert!(prompt.len() < 3000, "Prompt too long: {} chars", prompt.len());
+        assert!(prompt.len() < 3200, "Prompt too long: {} chars", prompt.len());
     }
 
     // --- realize_insight tests ---
