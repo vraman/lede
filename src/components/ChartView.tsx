@@ -208,7 +208,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
       if (isDuckLoaded()) {
         const aggFn = aggType === "Avg" ? "AVG" : aggType === "Count" ? "COUNT" : aggType === "Min" ? "MIN" : aggType === "Max" ? "MAX" : "SUM";
         const limitClause = limit ? `LIMIT ${limit}` : "";
-        const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
+        const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv WHERE "${metric}" IS NOT NULL GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
         const rows = await duckQuery(sql);
         return rows as Record<string, string | number>[];
       }
@@ -222,7 +222,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
 
     async function queryCount(groupBy: string): Promise<Record<string, string | number>[]> {
       if (isDuckLoaded()) {
-        const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv GROUP BY "${groupBy}" ORDER BY count DESC`;
+        const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv WHERE "${groupBy}" IS NOT NULL AND "${groupBy}" != '' GROUP BY "${groupBy}" ORDER BY count DESC`;
         return await duckQuery(sql) as Record<string, string | number>[];
       }
       return countByGroup(buildRows(data), groupBy);
