@@ -521,7 +521,7 @@ function App() {
   const sourceFilename = sourcePath.split("/").pop() || "";
 
   return (
-    <DataContext.Provider value={{ data, suggestions: allSuggestions, sourceFilename, aiLoading }}>
+    <DataContext.Provider value={{ data, suggestions: allSuggestions, sourceFilename, aiLoading, duckDbReady }}>
       <main className="app workspace">
         <header className="app-header">
           {editingTitle ? (

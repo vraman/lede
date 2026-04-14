@@ -333,6 +333,20 @@ pub struct InsightEngine {
 unsafe impl Send for InsightEngine {}
 unsafe impl Sync for InsightEngine {}
 
+impl Drop for InsightEngine {
+    fn drop(&mut self) {
+        // Intentionally leak the Metal resources to avoid a crash in
+        // llama.cpp's C++ static destructors during process exit.
+        // The OS reclaims all memory anyway — this just prevents the
+        // ggml_metal_device_free assertion failure.
+        if self.ctx.is_some() || self.model.is_some() {
+            std::mem::forget(self.ctx.take());
+            std::mem::forget(self.model.take());
+            std::mem::forget(self.backend.take());
+        }
+    }
+}
+
 impl InsightEngine {
     pub fn new() -> Self {
         Self {

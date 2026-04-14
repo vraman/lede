@@ -6,6 +6,7 @@ interface DataContextValue {
   suggestions: ViewSuggestion[];
   sourceFilename: string;
   aiLoading: boolean;
+  duckDbReady: boolean;
 }
 
 export const DataContext = createContext<DataContextValue>({
@@ -13,6 +14,7 @@ export const DataContext = createContext<DataContextValue>({
   suggestions: [],
   sourceFilename: "",
   aiLoading: false,
+  duckDbReady: false,
 });
 
 export function useDataContext() {

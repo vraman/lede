@@ -12,7 +12,7 @@ export default function DataviewNodeView({
   editor,
   getPos,
 }: NodeViewProps) {
-  const { data, suggestions } = useDataContext();
+  const { data, suggestions, duckDbReady } = useDataContext();
   const [showInsertMenu, setShowInsertMenu] = useState(false);
   const [editingInsight, setEditingInsight] = useState(false);
   const [insightDraft, setInsightDraft] = useState("");
@@ -119,6 +119,7 @@ export default function DataviewNodeView({
             alternatives={alternatives}
             onSwap={handleSwap}
             onChangeAggregate={handleChangeAggregate}
+            duckDbReady={duckDbReady}
           />
         )}
       </div>
