@@ -351,7 +351,7 @@ impl InsightEngine {
             LlamaBackend::init().map_err(|e| format!("Failed to init llama backend: {}", e))?;
 
         let model_params = LlamaModelParams::default();
-        let model_params = model_params.with_n_gpu_layers(0); // CPU only for portability
+        let model_params = model_params.with_n_gpu_layers(999); // Offload all layers to Metal GPU
 
         let model = LlamaModel::load_from_file(&backend, path, &model_params)
             .map_err(|e| format!("Failed to load model: {}", e))?;
