@@ -152,12 +152,31 @@ function App() {
   const loadCSV = async (path: string) => {
     setLoading(true);
     setError(null);
+    setDuckDbReady(false);
     const t0 = performance.now();
     try {
+      // Start DuckDB load immediately — runs in parallel with parse_csv
+      const t2 = performance.now();
+      const duckPromise = loadDuckDB(path).then(async () => {
+        console.log(`[perf] DuckDB load: ${(performance.now() - t2).toFixed(0)}ms`);
+        // Get real row count from DuckDB
+        try {
+          const countRows = await invoke<Record<string, unknown>[]>("query_duckdb", {
+            sql: "SELECT COUNT(*) as cnt FROM csv",
+          });
+          if (countRows.length > 0) {
+            const realCount = Number(countRows[0].cnt);
+            setData((prev) => prev ? { ...prev, row_count: realCount } : prev);
+          }
+        } catch { /* ok, use parse_csv count */ }
+        setDuckDbReady(true);
+      }).catch((e) => {
+        console.error(`[perf] DuckDB load failed: ${e}`);
+      });
+
       const result = await invoke<ParsedCSV>("parse_csv", { path });
       console.log(`[perf] parse_csv: ${(performance.now() - t0).toFixed(0)}ms`);
 
-      const t1 = performance.now();
       setData(result);
       setSourcePath(path);
       const name = path.split("/").pop()?.replace(".csv", "") || "Untitled";
@@ -166,19 +185,11 @@ function App() {
       setAllSuggestions(result.suggestions);
       metaRef.current = null;
       setSavePath("");
-      console.log(`[perf] setState: ${(performance.now() - t1).toFixed(0)}ms`);
 
       invoke("add_recent_file", { path, title: name }).catch(() => {});
 
-      // Load CSV into DuckDB for full-dataset aggregation
-      setDuckDbReady(false);
-      const t2 = performance.now();
-      loadDuckDB(path).then(() => {
-        console.log(`[perf] DuckDB load: ${(performance.now() - t2).toFixed(0)}ms`);
-        setDuckDbReady(true);
-      }).catch((e) => {
-        console.error(`[perf] DuckDB load failed: ${e}`);
-      });
+      // Wait for DuckDB if it hasn't finished yet (usually it has by now)
+      await duckPromise;
 
       // Phase 2: Request AI insights asynchronously (only if enabled)
       if (aiEnabled) {

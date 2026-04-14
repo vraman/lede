@@ -25,6 +25,11 @@ export default function DataTable({ data, duckDbReady }: Props) {
     async function fetchPage() {
       if (duckDbReady) {
         try {
+          // Get real row count from DuckDB
+          const countResult = await duckQuery("SELECT COUNT(*) as cnt FROM csv");
+          if (countResult.length > 0) {
+            setTotalRows(Number(countResult[0].cnt));
+          }
           const offset = page * PAGE_SIZE;
           const result = await duckQuery(
             `SELECT * FROM csv LIMIT ${PAGE_SIZE} OFFSET ${offset}`
@@ -33,7 +38,6 @@ export default function DataTable({ data, duckDbReady }: Props) {
             setColNames(Object.keys(result[0]));
           }
           setRows(result);
-          setTotalRows(data.row_count);
           return;
         } catch {
           // Fall through to sample rows
