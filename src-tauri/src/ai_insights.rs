@@ -324,10 +324,12 @@ pub fn realize_insight(
 pub struct InsightEngine {
     backend: Option<LlamaBackend>,
     model: Option<LlamaModel>,
+    ctx: Option<llama_cpp_2::context::LlamaContext<'static>>,
 }
 
 // SAFETY: LlamaBackend and LlamaModel are thread-safe for read operations.
 // We only mutate during load_model which is behind a Mutex.
+// The context borrows model/backend but they're never moved after creation.
 unsafe impl Send for InsightEngine {}
 unsafe impl Sync for InsightEngine {}
 
@@ -336,6 +338,7 @@ impl InsightEngine {
         Self {
             backend: None,
             model: None,
+            ctx: None,
         }
     }
 
@@ -355,6 +358,19 @@ impl InsightEngine {
 
         self.model = Some(model);
         self.backend = Some(backend);
+
+        // Create context once — reuse across calls
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE));
+        let model_ref = self.model.as_ref().unwrap();
+        let backend_ref = self.backend.as_ref().unwrap();
+        // SAFETY: model and backend are pinned in this struct and never moved
+        let model_static: &'static LlamaModel = unsafe { &*(model_ref as *const LlamaModel) };
+        let ctx = model_static
+            .new_context(backend_ref, ctx_params)
+            .map_err(|e| format!("Failed to create context: {}", e))?;
+        self.ctx = Some(ctx);
+
         Ok(())
     }
 
@@ -363,16 +379,12 @@ impl InsightEngine {
     }
 
     /// Run a prompt through the model and return raw text output.
-    fn run_prompt(&self, prompt: &str) -> Result<String, String> {
+    fn run_prompt(&mut self, prompt: &str) -> Result<String, String> {
         let model = self.model.as_ref().ok_or("Model not loaded")?;
-        let backend = self.backend.as_ref().ok_or("Backend not initialized")?;
+        let ctx = self.ctx.as_mut().ok_or("Context not initialized")?;
 
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE));
-
-        let mut ctx = model
-            .new_context(backend, ctx_params)
-            .map_err(|e| format!("Failed to create context: {}", e))?;
+        // Clear KV cache from previous call
+        ctx.clear_kv_cache();
 
         let tokens = model
             .str_to_token(prompt, AddBos::Always)
@@ -432,7 +444,7 @@ impl InsightEngine {
         Ok(output)
     }
 
-    pub fn generate(&self, context: &CsvContext) -> Result<AiInsightsResponse, String> {
+    pub fn generate(&mut self, context: &CsvContext) -> Result<AiInsightsResponse, String> {
         let prompt = build_prompt(context);
         let output = self.run_prompt(&prompt)?;
         let mut response = parse_ai_response(&output, &context.columns)?;
@@ -440,7 +452,7 @@ impl InsightEngine {
         Ok(response)
     }
 
-    pub fn generate_sql(&self, question: &str, columns: &[String], table_name: &str) -> Result<String, String> {
+    pub fn generate_sql(&mut self, question: &str, columns: &[String], table_name: &str) -> Result<String, String> {
         let mut prompt = String::new();
         prompt.push_str("<start_of_turn>user\n");
         prompt.push_str("Translate this question to a DuckDB SQL query.\n\n");
@@ -784,7 +796,7 @@ pub async fn generate_ai_insights(
     };
 
     // Run inference (may take a few seconds)
-    let engine = engine.lock().await;
+    let mut engine = engine.lock().await;
     let result = tokio::task::block_in_place(|| engine.generate(&context));
 
     match result {
@@ -801,7 +813,7 @@ pub async fn natural_language_to_sql(
     app: AppHandle,
 ) -> Result<String, String> {
     let engine = app.state::<Arc<Mutex<InsightEngine>>>();
-    let engine = engine.lock().await;
+    let mut engine = engine.lock().await;
     if !engine.is_loaded() {
         return Err("AI model not loaded".to_string());
     }
@@ -1031,7 +1043,7 @@ mod tests {
 
     #[test]
     fn test_generate_fails_when_not_loaded() {
-        let engine = InsightEngine::new();
+        let mut engine = InsightEngine::new();
         let ctx = sample_context();
         let result = engine.generate(&ctx);
         assert!(result.is_err());
