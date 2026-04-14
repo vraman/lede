@@ -47,6 +47,10 @@ pub struct ViewSuggestion {
     pub insight_edited: bool,
     #[serde(default)]
     pub denominator: Option<String>,
+    #[serde(default)]
+    pub filter_column: Option<String>,
+    #[serde(default)]
+    pub filter_value: Option<String>,
 }
 
 fn default_suggested_by() -> String {
@@ -290,6 +294,8 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
             insight: None,
             insight_edited: false,
             denominator: None,
+        filter_column: None,
+        filter_value: None,
         });
     }
 
@@ -311,6 +317,8 @@ pub fn suggest_views(columns: &[ColumnMeta]) -> Vec<ViewSuggestion> {
             insight: None,
             insight_edited: false,
         denominator: None,
+        filter_column: None,
+        filter_value: None,
             });
     }
 
@@ -380,6 +388,8 @@ fn make_view(view_type: ViewType, metric: Option<&str>, group_by: Option<&str>, 
         insight: None,
         insight_edited: false,
         denominator: None,
+        filter_column: None,
+        filter_value: None,
     }
 }
 
@@ -400,6 +410,8 @@ fn make_bar_chart(metric: &str, group_by: &str, aggregate: Aggregate, is_tempora
         insight: None,
         insight_edited: false,
         denominator: None,
+        filter_column: None,
+        filter_value: None,
     }
 }
 

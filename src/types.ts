@@ -49,6 +49,8 @@ export interface ViewSuggestion {
   insight: string | null;
   insight_edited: boolean;
   denominator: string | null;
+  filter_column: string | null;
+  filter_value: string | null;
 }
 
 export interface ParsedCSV {
@@ -71,6 +73,8 @@ export interface AiViewSuggestion {
   group_by: string | null;
   aggregate: string | null;
   insight: string | null;
+  filter_column: string | null;
+  filter_value: string | null;
   insight_kind: string | null;
   insight_params: Record<string, unknown> | null;
   x_col: string | null;

@@ -101,6 +101,8 @@ function aiViewToSuggestion(aiView: AiViewSuggestion): ViewSuggestion {
     insight: aiView.insight ?? null,
     insight_edited: false,
     denominator: null,
+    filter_column: aiView.filter_column ?? null,
+    filter_value: aiView.filter_value ?? null,
   };
 }
 

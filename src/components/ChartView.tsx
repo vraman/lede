@@ -207,6 +207,16 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
     if (!containerRef.current) return;
     let cancelled = false;
 
+    // Build WHERE clause from suggestion filter + null filtering
+    function whereClause(nullCheckCol?: string): string {
+      const clauses: string[] = [];
+      if (nullCheckCol) clauses.push(`"${nullCheckCol}" IS NOT NULL`);
+      if (suggestion.filter_column && suggestion.filter_value) {
+        clauses.push(`"${suggestion.filter_column}" = '${suggestion.filter_value.replace(/'/g, "''")}'`);
+      }
+      return clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    }
+
     /** Query DuckDB for aggregated data. Returns empty if DuckDB not ready. */
     async function queryAgg(
       groupBy: string,
@@ -217,13 +227,18 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
       if (!isDuckLoaded()) return [];
       const aggFn = aggType === "Avg" ? "AVG" : aggType === "Count" ? "COUNT" : aggType === "Min" ? "MIN" : aggType === "Max" ? "MAX" : "SUM";
       const limitClause = limit ? `LIMIT ${limit}` : "";
-      const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv WHERE "${metric}" IS NOT NULL GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
+      const where = whereClause(metric);
+      const sql = `SELECT "${groupBy}", ${aggFn}("${metric}") as "${metric}" FROM csv ${where} GROUP BY "${groupBy}" ORDER BY "${metric}" DESC ${limitClause}`;
       return await duckQuery(sql) as Record<string, string | number>[];
     }
 
     async function queryCount(groupBy: string): Promise<Record<string, string | number>[]> {
       if (!isDuckLoaded()) return [];
-      const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv WHERE "${groupBy}" IS NOT NULL AND "${groupBy}" != '' GROUP BY "${groupBy}" ORDER BY count DESC`;
+      const nullCheck = `"${groupBy}" IS NOT NULL AND "${groupBy}" != ''`;
+      const filterCheck = suggestion.filter_column && suggestion.filter_value
+        ? ` AND "${suggestion.filter_column}" = '${suggestion.filter_value.replace(/'/g, "''")}'`
+        : "";
+      const sql = `SELECT "${groupBy}", COUNT(*) as count FROM csv WHERE ${nullCheck}${filterCheck} GROUP BY "${groupBy}" ORDER BY count DESC`;
       return await duckQuery(sql) as Record<string, string | number>[];
     }
 
@@ -530,8 +545,11 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
 
   const title = suggestion.title || suggestion.metric || suggestion.group_by || "Chart";
 
+  const filterLabel = suggestion.filter_column && suggestion.filter_value
+    ? ` · ${suggestion.filter_column}: ${suggestion.filter_value}`
+    : "";
   const subtitle = sourceFilename
-    ? `${sourceFilename} · ${data.row_count.toLocaleString()} rows`
+    ? `${sourceFilename} · ${data.row_count.toLocaleString()} rows${filterLabel}`
     : null;
 
   return (
