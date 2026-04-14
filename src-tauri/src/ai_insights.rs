@@ -471,7 +471,58 @@ pub fn build_prompt(context: &CsvContext) -> String {
     prompt.push_str(&format!("## Dataset: {} ({} rows)\n\n", context.filename, context.row_count));
 
     prompt.push_str("## Column Statistics:\n");
-    for s in &context.summaries {
+    // Intelligent column selection to fit context window:
+    // 1. Skip empty columns (0 unique values)
+    // 2. Skip ID/code columns (names ending in ID/Id/_id, or abbreviation variants)
+    // 3. Cap at 15 columns
+    let all_names: std::collections::HashSet<&str> = context.summaries.iter()
+        .map(|s| s.name.as_str()).collect();
+    // Build a set of (name, unique_count) for dedup detection
+    let name_counts: Vec<(&str, usize)> = context.summaries.iter()
+        .map(|s| (s.name.as_str(), s.unique_count)).collect();
+    let useful_summaries: Vec<&ColumnSummary> = context.summaries.iter()
+        .filter(|s| {
+            if s.unique_count == 0 { return false; }
+            let name = &s.name;
+            let lower = name.to_lowercase();
+            // Skip columns whose name ends with "ID"/"Id"/"_id"
+            if lower.ends_with("_id") || (lower.ends_with("id") && name.len() > 2) {
+                let base = name.trim_end_matches("ID").trim_end_matches("Id").trim_end_matches("_id");
+                if !base.is_empty() {
+                    // Check for any descriptive counterpart: Base, BaseDesc, BaseAbbr
+                    let has_counterpart = all_names.contains(base)
+                        || all_names.contains(format!("{}Desc", base).as_str())
+                        || all_names.contains(format!("{}Abbr", base).as_str());
+                    if has_counterpart {
+                        return false;
+                    }
+                }
+            }
+            // Skip footnote/note/comment columns — metadata noise
+            if lower.contains("footnote") || lower.contains("_note") || lower.ends_with("note")
+                || lower.contains("comment") || lower.contains("_url") || lower.ends_with("url") {
+                return false;
+            }
+            // Skip abbreviation columns if descriptive version exists
+            if lower.ends_with("abbr") || lower.ends_with("abbrev") {
+                let base = name.trim_end_matches("Abbr").trim_end_matches("Abbrev").trim_end_matches("abbr");
+                let desc_name = format!("{}Desc", base);
+                if all_names.contains(desc_name.as_str()) {
+                    return false;
+                }
+            }
+            // Skip duplicate-value columns (e.g., DataValueAlt has same unique_count as DataValue)
+            if name.contains("Alt") || name.contains("Symbol") {
+                let base = name.replace("Alt", "").replace("Symbol", "");
+                if name_counts.iter().any(|(n, c)| *n == base && *c == s.unique_count) {
+                    return false;
+                }
+            }
+            true
+        })
+        .take(15)
+        .collect();
+    for s in &useful_summaries {
         prompt.push_str(&format!("### {} ({:?}, {} unique)\n", s.name, s.col_type, s.unique_count));
         if let Some((min, max, mean)) = s.numeric_stats {
             prompt.push_str(&format!("  min={:.2}, max={:.2}, mean={:.2}\n", min, max, mean));
