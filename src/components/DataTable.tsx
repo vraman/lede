@@ -1,31 +1,39 @@
 import { useState, useEffect } from "react";
 import { ParsedCSV } from "../types";
-import { query as duckQuery, isLoaded as isDuckLoaded } from "../duckdb";
+import { query as duckQuery } from "../duckdb";
 
 interface Props {
   data: ParsedCSV;
+  duckDbReady: boolean;
 }
 
 const PAGE_SIZE = 50;
 
-export default function DataTable({ data }: Props) {
+export default function DataTable({ data, duckDbReady }: Props) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [colNames, setColNames] = useState<string[]>(data.columns.map((c) => c.name));
   const [page, setPage] = useState(0);
   const [totalRows, setTotalRows] = useState(data.row_count);
 
+  // Reset page when data changes
   useEffect(() => {
     setPage(0);
+    setColNames(data.columns.map((c) => c.name));
   }, [data]);
 
   useEffect(() => {
     async function fetchPage() {
-      if (isDuckLoaded()) {
+      if (duckDbReady) {
         try {
           const offset = page * PAGE_SIZE;
           const result = await duckQuery(
             `SELECT * FROM csv LIMIT ${PAGE_SIZE} OFFSET ${offset}`
           );
+          if (result.length > 0) {
+            setColNames(Object.keys(result[0]));
+          }
           setRows(result);
+          setTotalRows(data.row_count);
           return;
         } catch {
           // Fall through to sample rows
@@ -34,11 +42,13 @@ export default function DataTable({ data }: Props) {
       // Fallback: use sample_rows
       const start = page * PAGE_SIZE;
       const sliced = data.sample_rows.slice(start, start + PAGE_SIZE);
+      const cols = data.columns.map((c) => c.name);
+      setColNames(cols);
       setRows(
         sliced.map((row) => {
           const obj: Record<string, unknown> = {};
-          data.columns.forEach((col, i) => {
-            obj[col.name] = row[i];
+          cols.forEach((name, i) => {
+            obj[name] = row[i];
           });
           return obj;
         })
@@ -46,10 +56,9 @@ export default function DataTable({ data }: Props) {
       setTotalRows(data.sample_rows.length);
     }
     fetchPage();
-  }, [data, page]);
+  }, [data, page, duckDbReady]);
 
   const totalPages = Math.ceil(totalRows / PAGE_SIZE);
-  const colNames = data.columns.map((c) => c.name);
 
   return (
     <div className="view-card table-view">
@@ -86,7 +95,9 @@ export default function DataTable({ data }: Props) {
               {colNames.map((name, i) => (
                 <th key={name}>
                   {name}
-                  <span className="col-type">{data.columns[i].col_type}</span>
+                  {data.columns[i] && (
+                    <span className="col-type">{data.columns[i].col_type}</span>
+                  )}
                 </th>
               ))}
             </tr>
