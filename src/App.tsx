@@ -581,7 +581,7 @@ function App() {
               editorInstanceRef.current = editor;
             }}
           />
-          {aiEnabled && <QueryBar />}
+          {duckDbReady && <QueryBar />}
           <DataTable data={data} duckDbReady={duckDbReady} />
         </div>
       </main>

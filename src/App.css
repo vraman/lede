@@ -991,6 +991,48 @@ tr:hover td {
   color: var(--text-muted);
 }
 
+.query-scalar {
+  margin-top: 0.75rem;
+  text-align: center;
+}
+
+.query-scalar-value {
+  font-size: 2rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.query-viz-controls {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.5rem;
+}
+
+.query-viz-btn {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.query-viz-btn.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.query-chart {
+  margin-top: 0.5rem;
+}
+
+.query-chart svg {
+  width: 100%;
+  height: auto;
+}
+
 /* AI toggle in header */
 .btn-ai-toggle {
   padding: 0.3rem 0.7rem;

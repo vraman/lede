@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import * as Plot from "@observablehq/plot";
 import { query as duckQuery } from "../duckdb";
 import { useDataContext } from "../DataContext";
+
+type ResultView = "auto" | "table" | "chart";
 
 export default function QueryBar() {
   const { data } = useDataContext();
@@ -10,6 +13,8 @@ export default function QueryBar() {
   const [results, setResults] = useState<Record<string, unknown>[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [view, setView] = useState<ResultView>("auto");
+  const chartRef = useRef<HTMLDivElement>(null);
 
   if (!data) return null;
 
@@ -19,21 +24,19 @@ export default function QueryBar() {
     setError(null);
     setResults(null);
     setSql(null);
+    setView("auto");
 
     try {
-      // Ask the AI model to translate the question to SQL
-      const columns = data.columns.map(
-        (c) => `${c.name} (${c.col_type})`
-      );
-      const generatedSql = await invoke<string>("natural_language_to_sql", {
+      const columns = data.columns.map((c) => ({
+        name: c.name,
+        col_type: c.col_type,
+      }));
+      const generatedSql = await invoke<string>("translate_query", {
         question: question.trim(),
-        columns: columns,
+        columns,
         tableName: "csv",
       });
-
       setSql(generatedSql);
-
-      // Run the SQL against DuckDB
       const rows = await duckQuery(generatedSql);
       setResults(rows);
     } catch (e) {
@@ -43,12 +46,68 @@ export default function QueryBar() {
     }
   };
 
+  const resultShape = results && results.length > 0 ? detectShape(results) : null;
+
+  // Render chart when results change
+  useEffect(() => {
+    if (!chartRef.current || !results || results.length === 0) return;
+    if (!resultShape || resultShape.type === "scalar" || resultShape.type === "table") return;
+    if (view === "table") return;
+
+    const keys = Object.keys(results[0]);
+    let chart: SVGSVGElement | HTMLElement | undefined;
+
+    if (resultShape.type === "bar") {
+      const [groupCol, metricCol] = [keys[0], keys[1]];
+      const height = Math.max(200, results.length * 24);
+      chart = Plot.plot({
+        height,
+        marginLeft: 120,
+        x: { label: metricCol },
+        y: { label: groupCol },
+        marks: [
+          Plot.barX(results, {
+            y: groupCol,
+            x: metricCol,
+            fill: "#64748b",
+            sort: { y: "-x" },
+          }),
+          Plot.ruleX([0]),
+        ],
+      });
+    } else if (resultShape.type === "line") {
+      const [timeCol, metricCol] = [keys[0], keys[1]];
+      chart = Plot.plot({
+        height: 200,
+        x: { label: timeCol },
+        y: { label: metricCol },
+        marks: [
+          Plot.lineY(results, { x: timeCol, y: metricCol, stroke: "#64748b" }),
+          Plot.dot(results, { x: timeCol, y: metricCol, fill: "#64748b", r: 3 }),
+        ],
+      });
+    }
+
+    if (chart) {
+      chartRef.current.innerHTML = "";
+      chartRef.current.appendChild(chart);
+    }
+
+    return () => {
+      if (chartRef.current) chartRef.current.innerHTML = "";
+    };
+  }, [results, view, resultShape]);
+
+  const canChart = resultShape && (resultShape.type === "bar" || resultShape.type === "line");
+  const showChart = canChart && view !== "table";
+  const showTable = !showChart;
+
   return (
     <div className="query-bar">
       <div className="query-input-row">
         <input
           className="query-input"
-          placeholder="Ask a question about your data..."
+          placeholder="Ask about your data..."
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
           onKeyDown={(e) => {
@@ -60,19 +119,37 @@ export default function QueryBar() {
           onClick={handleQuery}
           disabled={loading || !question.trim()}
         >
-          {loading ? "..." : "Ask"}
+          {loading ? "..." : "Go"}
         </button>
       </div>
 
-      {sql && (
-        <div className="query-sql">
-          <code>{sql}</code>
+      {sql && <div className="query-sql"><code>{sql}</code></div>}
+      {error && <div className="query-error">{error}</div>}
+
+      {results && results.length > 0 && resultShape?.type === "scalar" && (
+        <div className="query-scalar">
+          <span className="query-scalar-value">
+            {formatValue(Object.values(results[0])[0])}
+          </span>
         </div>
       )}
 
-      {error && <div className="query-error">{error}</div>}
+      {results && results.length > 0 && (resultShape?.type === "bar" || resultShape?.type === "line") && (
+        <div className="query-viz-controls">
+          <button
+            className={`query-viz-btn ${view !== "table" ? "active" : ""}`}
+            onClick={() => setView("auto")}
+          >Chart</button>
+          <button
+            className={`query-viz-btn ${view === "table" ? "active" : ""}`}
+            onClick={() => setView("table")}
+          >Table</button>
+        </div>
+      )}
 
-      {results && results.length > 0 && (
+      {showChart && <div ref={chartRef} className="query-chart" />}
+
+      {results && showTable && resultShape?.type !== "scalar" && (
         <div className="query-results">
           <table>
             <thead>
@@ -86,16 +163,14 @@ export default function QueryBar() {
               {results.slice(0, 100).map((row, i) => (
                 <tr key={i}>
                   {Object.values(row).map((v, j) => (
-                    <td key={j}>{String(v ?? "")}</td>
+                    <td key={j}>{formatValue(v)}</td>
                   ))}
                 </tr>
               ))}
             </tbody>
           </table>
           {results.length > 100 && (
-            <p className="query-truncated">
-              Showing first 100 of {results.length} results
-            </p>
+            <p className="query-truncated">Showing first 100 of {results.length} results</p>
           )}
         </div>
       )}
@@ -105,4 +180,28 @@ export default function QueryBar() {
       )}
     </div>
   );
+}
+
+type ShapeType = "scalar" | "bar" | "line" | "table";
+
+function detectShape(rows: Record<string, unknown>[]): { type: ShapeType } {
+  const keys = Object.keys(rows[0]);
+  if (rows.length === 1 && keys.length === 1) return { type: "scalar" };
+  if (keys.length === 2 && rows.length > 1) {
+    const secondIsNumeric = rows.every((r) => r[keys[1]] === null || typeof r[keys[1]] === "number");
+    if (secondIsNumeric) {
+      const firstLooksYears = rows.every((r) => {
+        const n = Number(r[keys[0]]);
+        return !isNaN(n) && n >= 1900 && n <= 2100;
+      });
+      return { type: firstLooksYears ? "line" : "bar" };
+    }
+  }
+  return { type: "table" };
+}
+
+function formatValue(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "number") return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return String(v);
 }
