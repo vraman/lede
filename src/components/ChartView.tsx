@@ -3,7 +3,7 @@ import * as Plot from "@observablehq/plot";
 import * as topojson from "topojson-client";
 import type { Topology } from "topojson-specification";
 import { ParsedCSV, ViewSuggestion } from "../types";
-import { query as duckQuery, isLoaded as isDuckLoaded } from "../duckdb";
+import { query as duckQuery } from "../duckdb";
 import { useDataContext } from "../DataContext";
 
 interface Props {
@@ -224,7 +224,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
       aggType: string,
       limit?: number | null,
     ): Promise<Record<string, string | number>[]> {
-      if (!isDuckLoaded()) return [];
+      if (!duckDbReady) return [];
       const aggFn = aggType === "Avg" ? "AVG" : aggType === "Count" ? "COUNT" : aggType === "Min" ? "MIN" : aggType === "Max" ? "MAX" : "SUM";
       const limitClause = limit ? `LIMIT ${limit}` : "";
       const where = whereClause(metric);
@@ -233,7 +233,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
     }
 
     async function queryCount(groupBy: string): Promise<Record<string, string | number>[]> {
-      if (!isDuckLoaded()) return [];
+      if (!duckDbReady) return [];
       const nullCheck = `"${groupBy}" IS NOT NULL AND "${groupBy}" != ''`;
       const filterCheck = suggestion.filter_column && suggestion.filter_value
         ? ` AND "${suggestion.filter_column}" = '${suggestion.filter_value.replace(/'/g, "''")}'`
@@ -486,7 +486,7 @@ export default function ChartView({ data, suggestion, alternatives = [], onSwap,
 
           // Get raw lat/lng values from DuckDB
           let pointRows: Record<string, unknown>[];
-          if (isDuckLoaded()) {
+          if (duckDbReady) {
             pointRows = await duckQuery(
               `SELECT "${lngCol}", "${latCol}" FROM csv WHERE "${lngCol}" IS NOT NULL AND "${latCol}" IS NOT NULL LIMIT 5000`
             );
