@@ -17,7 +17,7 @@ pub struct ParsedCSV {
 }
 
 /// Maximum rows to read for column classification. Beyond this, we only count rows.
-const MAX_CLASSIFY_ROWS: usize = 5000;
+const MAX_CLASSIFY_ROWS: usize = 1000;
 const MAX_SAMPLE_ROWS: usize = 100;
 
 #[tauri::command]
@@ -41,20 +41,22 @@ pub fn parse_csv(path: String) -> Result<ParsedCSV, String> {
 
     for result in rdr.records() {
         let record = result.map_err(|e| format!("Failed to read record: {}", e))?;
-        let row: Vec<String> = record.iter().map(|f| f.to_string()).collect();
 
-        if row_count < MAX_SAMPLE_ROWS {
-            sample_rows.push(row.clone());
-        }
-
-        // Only collect column data for classification up to MAX_CLASSIFY_ROWS
         if row_count < MAX_CLASSIFY_ROWS {
+            // Parse fields for classification and sampling
+            let row: Vec<String> = record.iter().map(|f| f.to_string()).collect();
+
+            if row_count < MAX_SAMPLE_ROWS {
+                sample_rows.push(row.clone());
+            }
+
             for (i, field) in row.into_iter().enumerate() {
                 if i < num_cols {
                     columns_data[i].push(field);
                 }
             }
         }
+        // After classification window, just count — don't parse fields
         row_count += 1;
     }
 
@@ -156,11 +158,14 @@ pub async fn query_duckdb(
     let db = app.state::<DuckDbState>();
     let conn = db.lock().await;
     let mut stmt = conn.prepare(&sql).map_err(|e| format!("SQL error: {}", e))?;
+
+    // Get column names before executing (from prepared statement metadata)
     let column_count = stmt.column_count();
     let column_names: Vec<String> = (0..column_count)
         .map(|i| stmt.column_name(i).map_or("?".to_string(), |v| v.to_string()))
         .collect();
 
+    // Execute and collect rows
     let rows = stmt
         .query_map([], |row| {
             let mut map = HashMap::new();
@@ -186,7 +191,10 @@ pub async fn query_duckdb(
 
     let mut result = Vec::new();
     for row in rows {
-        result.push(row.map_err(|e| format!("Row error: {}", e))?);
+        match row {
+            Ok(map) => result.push(map),
+            Err(_) => continue, // skip bad rows
+        }
     }
     Ok(result)
 }
