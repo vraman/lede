@@ -39,24 +39,24 @@ pub fn parse_csv(path: String) -> Result<ParsedCSV, String> {
     let mut sample_rows: Vec<Vec<String>> = Vec::new();
     let mut row_count = 0;
 
+    // Only read enough rows for classification + sampling, then stop.
+    // Row count comes from DuckDB (full dataset) — no need to read the entire file here.
     for result in rdr.records() {
+        if row_count >= MAX_CLASSIFY_ROWS {
+            break; // Don't read the rest — DuckDB handles full-dataset queries
+        }
         let record = result.map_err(|e| format!("Failed to read record: {}", e))?;
+        let row: Vec<String> = record.iter().map(|f| f.to_string()).collect();
 
-        if row_count < MAX_CLASSIFY_ROWS {
-            // Parse fields for classification and sampling
-            let row: Vec<String> = record.iter().map(|f| f.to_string()).collect();
+        if row_count < MAX_SAMPLE_ROWS {
+            sample_rows.push(row.clone());
+        }
 
-            if row_count < MAX_SAMPLE_ROWS {
-                sample_rows.push(row.clone());
-            }
-
-            for (i, field) in row.into_iter().enumerate() {
-                if i < num_cols {
-                    columns_data[i].push(field);
-                }
+        for (i, field) in row.into_iter().enumerate() {
+            if i < num_cols {
+                columns_data[i].push(field);
             }
         }
-        // After classification window, just count — don't parse fields
         row_count += 1;
     }
 
