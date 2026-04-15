@@ -957,15 +957,26 @@ tr:hover td {
   cursor: default;
 }
 
-.query-sql {
+.query-sql-row {
+  display: flex;
+  gap: 0.25rem;
   margin-top: 0.5rem;
+}
+
+.query-sql-input {
+  flex: 1;
   padding: 0.4rem 0.75rem;
   background: #1e1e23;
   color: #a5b4fc;
+  border: 1px solid transparent;
   border-radius: var(--radius);
   font-family: var(--font-mono);
   font-size: 0.75rem;
-  overflow-x: auto;
+}
+
+.query-sql-input:focus {
+  border-color: var(--accent);
+  outline: none;
 }
 
 .query-error {
