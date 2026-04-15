@@ -95,6 +95,35 @@ pub fn simple_query_to_sql(question: &str, columns: &[ColumnMeta], table: &str) 
         }
     }
 
+    // "which X has the most/least/highest/lowest Y"
+    for prefix in &["which ", "what "] {
+        if let Some(rest) = q.strip_prefix(prefix) {
+            // "which state has the most orders"
+            for keyword in &[" has the most ", " has the highest ", " has the largest "] {
+                if let Some(idx) = rest.find(keyword) {
+                    let group_text = &rest[..idx];
+                    let metric_text = &rest[idx + keyword.len()..];
+                    if let (Some(group), Some(metric)) = (fuzzy_match_column(group_text, columns), fuzzy_match_column(metric_text, columns)) {
+                        return Some(format!(
+                            "SELECT \"{group}\", SUM(\"{metric}\") as \"{metric}\" FROM {table} WHERE \"{metric}\" IS NOT NULL GROUP BY \"{group}\" ORDER BY \"{metric}\" DESC LIMIT 1"
+                        ));
+                    }
+                }
+            }
+            for keyword in &[" has the least ", " has the lowest ", " has the smallest "] {
+                if let Some(idx) = rest.find(keyword) {
+                    let group_text = &rest[..idx];
+                    let metric_text = &rest[idx + keyword.len()..];
+                    if let (Some(group), Some(metric)) = (fuzzy_match_column(group_text, columns), fuzzy_match_column(metric_text, columns)) {
+                        return Some(format!(
+                            "SELECT \"{group}\", SUM(\"{metric}\") as \"{metric}\" FROM {table} WHERE \"{metric}\" IS NOT NULL GROUP BY \"{group}\" ORDER BY \"{metric}\" ASC LIMIT 1"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     // "X by Y" / "show X by Y" / "show me X by Y"
     let stripped = q
         .strip_prefix("show me ")
@@ -304,6 +333,20 @@ mod tests {
     fn test_fuzzy_match() {
         let sql = simple_query_to_sql("total rev", &test_cols(), "csv").unwrap();
         assert!(sql.contains("SUM(\"revenue\")"), "Got: {}", sql);
+    }
+
+    #[test]
+    fn test_which_most() {
+        let sql = simple_query_to_sql("which state has the most orders", &test_cols(), "csv").unwrap();
+        assert!(sql.contains("SUM(\"orders\")"), "Got: {}", sql);
+        assert!(sql.contains("GROUP BY \"state\""), "Got: {}", sql);
+        assert!(sql.contains("DESC LIMIT 1"), "Got: {}", sql);
+    }
+
+    #[test]
+    fn test_which_least() {
+        let sql = simple_query_to_sql("which state has the least revenue", &test_cols(), "csv").unwrap();
+        assert!(sql.contains("ASC LIMIT 1"), "Got: {}", sql);
     }
 
     #[test]
