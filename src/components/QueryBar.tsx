@@ -123,7 +123,47 @@ export default function QueryBar() {
         </button>
       </div>
 
-      {sql && <div className="query-sql"><code>{sql}</code></div>}
+      {sql && (
+        <div className="query-sql-row">
+          <input
+            className="query-sql-input"
+            value={sql}
+            onChange={(e) => setSql(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === "Enter" && sql) {
+                setLoading(true);
+                setError(null);
+                try {
+                  const rows = await duckQuery(sql);
+                  setResults(rows);
+                } catch (err) {
+                  setError(String(err));
+                  setResults(null);
+                } finally {
+                  setLoading(false);
+                }
+              }
+            }}
+          />
+          <button
+            className="query-run-btn"
+            onClick={async () => {
+              if (!sql) return;
+              setLoading(true);
+              setError(null);
+              try {
+                const rows = await duckQuery(sql);
+                setResults(rows);
+              } catch (err) {
+                setError(String(err));
+                setResults(null);
+              } finally {
+                setLoading(false);
+              }
+            }}
+          >Run</button>
+        </div>
+      )}
       {error && <div className="query-error">{error}</div>}
 
       {results && results.length > 0 && resultShape?.type === "scalar" && (

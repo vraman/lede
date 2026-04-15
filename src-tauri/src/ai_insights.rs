@@ -582,6 +582,7 @@ pub fn build_prompt(context: &CsvContext) -> String {
     prompt.push_str("- Do NOT state that a larger group has a larger total\n");
     prompt.push_str("- DO look for: outliers, uneven distributions, surprising category leaders, unexpected per-unit ratios\n");
     prompt.push_str("- Prefer Avg over Sum when comparing groups of different sizes\n");
+    prompt.push_str("- Do NOT use CountBar if a numeric metric is available — use BarChart with a metric instead\n");
     prompt.push_str("- ONLY use column names listed above. Do NOT invent column names.\n\n");
     prompt.push_str("For each view and as standalone insights, use structured insight_kind + insight_params. Do NOT write specific numbers — they will be computed from data.\n\n");
     prompt.push_str("Required fields by view_type:\n");
