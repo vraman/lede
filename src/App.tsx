@@ -355,7 +355,9 @@ function App() {
       if (response.suggested_summary) {
         const editor = editorInstanceRef.current;
         if (editor) {
-          const summary = response.suggested_summary;
+          const summary = { ...response.suggested_summary };
+          // Strip "by X" from summary title — summary card shows a single number, not per-group
+          summary.title = summary.title.replace(/\s+by\s+\w+.*/i, "");
           editor.state.doc.descendants((node, pos) => {
             if (node.type.name === "dataview") {
               const vc = node.attrs.viewConfig;
