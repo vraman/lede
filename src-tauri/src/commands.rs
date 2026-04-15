@@ -216,7 +216,27 @@ fn arrow_col_to_json(col: &dyn duckdb::arrow::array::Array, idx: usize) -> serde
             let arr = col.as_any().downcast_ref::<LargeStringArray>().unwrap();
             serde_json::Value::String(arr.value(idx).to_string())
         }
-        _ => serde_json::Value::String(format!("{:?}", col.data_type())),
+        DataType::Decimal128(_, scale) => {
+            let arr = col.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let raw = arr.value(idx);
+            let scale = *scale as u32;
+            if scale == 0 {
+                serde_json::json!(raw as f64)
+            } else {
+                serde_json::json!(raw as f64 / 10f64.powi(scale as i32))
+            }
+        }
+        _ => {
+            // Fallback: try to extract as string and parse as number
+            let display = format!("{}", duckdb::arrow::util::display::ArrayFormatter::try_new(col, &Default::default())
+                .map(|f| f.value(idx).to_string())
+                .unwrap_or_else(|_| format!("{:?}", col.data_type())));
+            if let Ok(n) = display.parse::<f64>() {
+                serde_json::json!(n)
+            } else {
+                serde_json::Value::String(display)
+            }
+        }
     }
 }
 
