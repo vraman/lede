@@ -601,7 +601,7 @@ pub fn build_prompt(context: &CsvContext) -> String {
     prompt.push_str("- count: {column} → \"N unique values\"\n\n");
     prompt.push_str("Also include:\n");
     prompt.push_str("- suggested_title: a short, descriptive notebook title (3-6 words)\n");
-    prompt.push_str("- suggested_summary: {title, metric, aggregate, denominator?} — the most interesting single number. For simple aggregates: {title:\"Total Revenue\", metric:\"revenue\", aggregate:\"Sum\"}. For ratios: {title:\"Revenue Per Order\", metric:\"revenue\", aggregate:\"Sum\", denominator:\"orders\"} — Rust will compute Sum(metric)/Sum(denominator).\n\n");
+    prompt.push_str("- suggested_summary: {title, metric, aggregate, denominator?} — a single aggregate over the ENTIRE dataset (not filtered). Title must accurately describe the computation. For simple: {title:\"Total DataValue\", metric:\"DataValue\", aggregate:\"Sum\"}. For ratios: {title:\"Value Per Record\", metric:\"DataValue\", aggregate:\"Sum\", denominator:\"orders\"}.\n\n");
     prompt.push_str("Respond with ONLY valid JSON. Example:\n");
     prompt.push_str(r#"{"suggested_title":"Product Revenue Analysis","suggested_summary":{"title":"Revenue Per Order","metric":"revenue","aggregate":"Sum","denominator":"orders"},"suggested_views":[{"view_type":"BoxPlot","title":"Revenue spread by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight_kind":"compare_two","insight_params":{"metric":"revenue","group_by":"product","aggregate":"Sum"}}],"insights":[{"kind":"concentration","params":{"metric":"revenue","group_by":"product","aggregate":"Sum","n":3}}]}"#);
     prompt.push_str("\n\nONLY use column names from the dataset.\n");
