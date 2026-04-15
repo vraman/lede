@@ -16,11 +16,12 @@ pub fn simple_query_to_sql(question: &str, columns: &[ColumnMeta], table: &str) 
         return Some(format!("SELECT COUNT(*) as count FROM {}", table));
     }
 
-    // "how many X" → count by group
+    // "how many X" / "how many X are there" → count distinct
     if let Some(rest) = q.strip_prefix("how many ") {
-        if let Some(col) = fuzzy_match_column(rest.trim(), columns) {
+        let rest = rest.trim_end_matches("are there").trim_end_matches("exist").trim();
+        if let Some(col) = fuzzy_match_column(rest, columns) {
             return Some(format!(
-                "SELECT \"{col}\", COUNT(*) as count FROM {table} GROUP BY \"{col}\" ORDER BY count DESC"
+                "SELECT COUNT(DISTINCT \"{col}\") as count FROM {table}"
             ));
         }
     }
@@ -288,9 +289,15 @@ mod tests {
     }
 
     #[test]
-    fn test_count_by_group() {
+    fn test_count_distinct() {
         let sql = simple_query_to_sql("how many categories", &test_cols(), "csv").unwrap();
-        assert!(sql.contains("GROUP BY \"category\""), "Got: {}", sql);
+        assert!(sql.contains("COUNT(DISTINCT"), "Got: {}", sql);
+    }
+
+    #[test]
+    fn test_count_are_there() {
+        let sql = simple_query_to_sql("how many states are there", &test_cols(), "csv").unwrap();
+        assert!(sql.contains("COUNT(DISTINCT"), "Got: {}", sql);
     }
 
     #[test]
