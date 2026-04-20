@@ -3,6 +3,10 @@
 Persistent local desktop workspace for data curiosity.
 **Don't bury the lede in your data.**
 
+![Lede — a map of US revenue by state with a summary card above it](docs/screenshots/hero-shot.png)
+
+> **Status: experimental.** Single-developer project, macOS only. Expect rough edges.
+
 Lede is a desktop app for non-technical people with CSVs who want answers, not infrastructure. Drop a CSV, get instant charts, write notes alongside your data, and optionally enable local AI insights — all without sending your data anywhere.
 
 ## Features
@@ -13,6 +17,16 @@ Lede is a desktop app for non-technical people with CSVs who want answers, not i
 - **Notebook format** — interleave prose and charts in a single document, save as `.lede` files
 - **Full-dataset queries** — DuckDB-WASM aggregates over all rows, not just a sample
 - **No cloud, no accounts** — everything runs locally on your Mac
+
+## Screenshots
+
+**Natural-language query bar** — ask a question, get a chart and the SQL behind it.
+
+![Query bar: "Which state has the highest revenue?" → California 245,000](docs/screenshots/query-bar.png)
+
+**Home screen** — drop a CSV or pick one from recents.
+
+![Lede home screen with recent files list](docs/screenshots/home-screen.png)
 
 ## Requirements
 
@@ -46,10 +60,10 @@ cargo tauri dev
 ### Run tests
 
 ```bash
-# Rust tests (86 tests)
+# Rust tests
 cd src-tauri && cargo test
 
-# Frontend tests (21 tests)
+# Frontend tests
 npx vitest run
 
 # TypeScript type checking
@@ -89,3 +103,7 @@ This is only needed once.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+### Model license
+
+The optional AI features use [Google's Gemma 3 4B](https://ai.google.dev/gemma) model, which is distributed under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms). Enabling AI features and downloading the model implies agreement with those terms. Lede does not redistribute the model — it's fetched from Google's servers on first use.

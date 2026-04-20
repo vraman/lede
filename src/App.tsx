@@ -158,7 +158,7 @@ function App() {
       // Start DuckDB load immediately — runs in parallel with parse_csv
       const t2 = performance.now();
       const duckPromise = loadDuckDB(path).then(async () => {
-        console.log(`[perf] DuckDB load: ${(performance.now() - t2).toFixed(0)}ms`);
+        if (import.meta.env.DEV) console.log(`[perf] DuckDB load: ${(performance.now() - t2).toFixed(0)}ms`);
         // Get real row count from DuckDB
         try {
           const countRows = await invoke<Record<string, unknown>[]>("query_duckdb", {
@@ -175,7 +175,7 @@ function App() {
       });
 
       const result = await invoke<ParsedCSV>("parse_csv", { path });
-      console.log(`[perf] parse_csv: ${(performance.now() - t0).toFixed(0)}ms`);
+      if (import.meta.env.DEV) console.log(`[perf] parse_csv: ${(performance.now() - t0).toFixed(0)}ms`);
 
       setData(result);
       setSourcePath(path);
@@ -195,14 +195,14 @@ function App() {
       if (aiEnabled) {
         const t3 = performance.now();
         requestAiInsights(path).then(() => {
-          console.log(`[perf] AI insights: ${(performance.now() - t3).toFixed(0)}ms`);
+          if (import.meta.env.DEV) console.log(`[perf] AI insights: ${(performance.now() - t3).toFixed(0)}ms`);
         });
       }
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
-      console.log(`[perf] total loadCSV: ${(performance.now() - t0).toFixed(0)}ms`);
+      if (import.meta.env.DEV) console.log(`[perf] total loadCSV: ${(performance.now() - t0).toFixed(0)}ms`);
     }
   };
 

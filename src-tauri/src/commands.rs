@@ -132,8 +132,8 @@ pub fn add_recent_file(app: tauri::AppHandle, path: String, title: String) -> Re
 pub type DuckDbState = Arc<Mutex<Connection>>;
 
 /// Create a new in-memory DuckDB connection.
-pub fn create_duckdb() -> Connection {
-    Connection::open_in_memory().expect("Failed to create DuckDB connection")
+pub fn create_duckdb() -> Result<Connection, duckdb::Error> {
+    Connection::open_in_memory()
 }
 
 #[tauri::command]
