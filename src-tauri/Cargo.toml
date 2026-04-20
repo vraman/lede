@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "Persistent local desktop workspace for data curiosity"
 authors = ["Vasu Raman <vasumathi.raman@gmail.com>"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/vraman/lede"
+readme = "../README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

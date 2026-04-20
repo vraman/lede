@@ -28,7 +28,7 @@ pub fn run() {
             let engine = Arc::new(Mutex::new(InsightEngine::new()));
             app.manage(model_mgr.clone());
             app.manage(engine.clone());
-            app.manage(Arc::new(Mutex::new(create_duckdb())) as DuckDbState);
+            app.manage(Arc::new(Mutex::new(create_duckdb()?)) as DuckDbState);
 
             // Preload AI model in background if already downloaded
             if model_mgr.is_downloaded() {

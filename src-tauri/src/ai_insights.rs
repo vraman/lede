@@ -369,7 +369,7 @@ impl InsightEngine {
             LlamaBackend::init().map_err(|e| format!("Failed to init llama backend: {}", e))?;
 
         let model_params = LlamaModelParams::default();
-        let model_params = model_params.with_n_gpu_layers(999); // Metal GPU — exit crash is cosmetic (no terminal in DMG)
+        let model_params = model_params.with_n_gpu_layers(999); // offload all layers where possible; falls back to CPU if Metal unavailable
 
         let model = LlamaModel::load_from_file(&backend, path, &model_params)
             .map_err(|e| format!("Failed to load model: {}", e))?;
@@ -382,7 +382,12 @@ impl InsightEngine {
             .with_n_ctx(NonZeroU32::new(CONTEXT_SIZE));
         let model_ref = self.model.as_ref().unwrap();
         let backend_ref = self.backend.as_ref().unwrap();
-        // SAFETY: model and backend are pinned in this struct and never moved
+        // SAFETY: the upstream API ties LlamaContext's lifetime to &LlamaModel,
+        // but we need to co-locate both in this struct. The invariant we uphold:
+        //   (1) self.model is never reassigned once Some (load_model returns early if loaded)
+        //   (2) self.ctx is declared after self.model, so it drops first
+        //   (3) impl Drop forgets both before either destructor runs
+        // As long as those hold, ctx never outlives the model it borrows from.
         let model_static: &'static LlamaModel = unsafe { &*(model_ref as *const LlamaModel) };
         let ctx = model_static
             .new_context(backend_ref, ctx_params)
