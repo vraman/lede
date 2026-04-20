@@ -27,3 +27,6 @@ dist-ssr
 .claude/settings.local.json
 .claude/.credentials.json
 CLAUDE.local.md
+
+# Personal local shell scripts (e.g. init.local.sh)
+*.local.sh
