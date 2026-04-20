@@ -326,10 +326,23 @@ mod tests {
         path.to_string_lossy().to_string()
     }
 
+    /// Returns the path if present, or None if missing so tests can skip.
+    /// Real-world fixtures are downloaded via tests/fixtures/real-world/download.sh.
+    fn realworld_or_skip(name: &str) -> Option<String> {
+        let path = realworld_path(name);
+        if std::path::Path::new(&path).exists() {
+            Some(path)
+        } else {
+            eprintln!("SKIP: {} not present — run tests/fixtures/real-world/download.sh", name);
+            None
+        }
+    }
+
     #[test]
     fn test_parse_customers_10k() {
+        let Some(path) = realworld_or_skip("customers-10000.csv") else { return };
         let start = std::time::Instant::now();
-        let result = parse_csv(realworld_path("customers-10000.csv")).unwrap();
+        let result = parse_csv(path).unwrap();
         let elapsed = start.elapsed();
         eprintln!("=== customers-10000.csv ===");
         eprintln!("  rows: {}, cols: {}, parse time: {:?}", result.row_count, result.columns.len(), elapsed);
@@ -345,8 +358,9 @@ mod tests {
 
     #[test]
     fn test_parse_uncleaned_jobs() {
+        let Some(path) = realworld_or_skip("uncleaned_ds_jobs.csv") else { return };
         let start = std::time::Instant::now();
-        let result = parse_csv(realworld_path("uncleaned_ds_jobs.csv")).unwrap();
+        let result = parse_csv(path).unwrap();
         let elapsed = start.elapsed();
         eprintln!("=== uncleaned_ds_jobs.csv ===");
         eprintln!("  rows: {}, cols: {}, parse time: {:?}", result.row_count, result.columns.len(), elapsed);
@@ -362,8 +376,9 @@ mod tests {
 
     #[test]
     fn test_parse_salary_survey() {
+        let Some(path) = realworld_or_skip("salary_survey.csv") else { return };
         let start = std::time::Instant::now();
-        let result = parse_csv(realworld_path("salary_survey.csv")).unwrap();
+        let result = parse_csv(path).unwrap();
         let elapsed = start.elapsed();
         eprintln!("=== salary_survey.csv ===");
         eprintln!("  rows: {}, cols: {}, parse time: {:?}", result.row_count, result.columns.len(), elapsed);
@@ -379,8 +394,9 @@ mod tests {
 
     #[test]
     fn test_parse_chronic_disease() {
+        let Some(path) = realworld_or_skip("chronic_disease.csv") else { return };
         let start = std::time::Instant::now();
-        let result = parse_csv(realworld_path("chronic_disease.csv")).unwrap();
+        let result = parse_csv(path).unwrap();
         let elapsed = start.elapsed();
         eprintln!("=== chronic_disease.csv ===");
         eprintln!("  rows: {}, cols: {}, parse time: {:?}", result.row_count, result.columns.len(), elapsed);

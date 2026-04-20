@@ -383,11 +383,16 @@ mod tests {
 
     // --- Real-world classification tests ---
 
-    fn classify_realworld(filename: &str) -> Vec<ColumnMeta> {
+    fn classify_realworld(filename: &str) -> Option<Vec<ColumnMeta>> {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.pop();
         path.push("tests/fixtures/real-world");
         path.push(filename);
+
+        if !path.exists() {
+            eprintln!("SKIP: {} not present — run tests/fixtures/real-world/download.sh", filename);
+            return None;
+        }
 
         let mut rdr = csv::Reader::from_path(&path).expect("Failed to open CSV");
         let headers: Vec<String> = rdr.headers().expect("No headers").iter().map(|h| h.to_string()).collect();
@@ -403,18 +408,18 @@ mod tests {
             count += 1;
             if count >= 5000 { break; }
         }
-        headers.into_iter().zip(columns).map(|(name, values)| classify_column(&name, &values)).collect()
+        Some(headers.into_iter().zip(columns).map(|(name, values)| classify_column(&name, &values)).collect())
     }
 
     #[test]
     fn test_index_column_is_identifier() {
-        let metas = classify_realworld("customers-10000.csv");
+        let Some(metas) = classify_realworld("customers-10000.csv") else { return };
         assert_eq!(find_col(&metas, "Index").col_type, ColumnType::Identifier);
     }
 
     #[test]
     fn test_timestamp_detected_as_temporal() {
-        let metas = classify_realworld("salary_survey.csv");
+        let Some(metas) = classify_realworld("salary_survey.csv") else { return };
         assert_eq!(find_col(&metas, "Timestamp").col_type, ColumnType::Temporal);
     }
 
