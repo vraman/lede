@@ -92,13 +92,13 @@ Produces:
 
 ## Unsigned App Warning
 
-The app is not code-signed. On first launch, macOS may block it. To open:
+The app is not code-signed, so macOS quarantines it on download. Before first launch, strip the quarantine flag:
 
-1. Right-click the app in Finder
-2. Select "Open"
-3. Click "Open" in the dialog
+```bash
+xattr -rc /Applications/Lede.app
+```
 
-This is only needed once.
+Then launch normally. Only needed once.
 
 ## License
 
