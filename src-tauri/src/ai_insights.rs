@@ -18,6 +18,9 @@ use tokio::sync::Mutex;
 const MAX_GENERATE_TOKENS: usize = 1024;
 /// Context window size for inference.
 const CONTEXT_SIZE: u32 = 4096;
+/// Maximum rows held in memory for summary computation and insight realization.
+/// Files larger than this use the first N rows (not a random sample).
+pub const MAX_INSIGHT_ROWS: usize = 50_000;
 
 /// Public response sent to the frontend — insights are plain strings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -124,18 +127,21 @@ pub struct CsvContext {
     pub row_count: usize,
     pub columns: Vec<ColumnMeta>,
     pub summaries: Vec<ColumnSummary>,
-    pub sample_rows: Vec<Vec<String>>,
+    /// Rows loaded from the CSV for summary computation and insight realization.
+    /// Capped at `MAX_INSIGHT_ROWS`; for larger files this is the first N rows,
+    /// not a random sample.
+    pub data_rows: Vec<Vec<String>>,
     pub current_views: Vec<String>,
 }
 
 /// Compute column summaries from sample rows.
-pub fn compute_summaries(columns: &[ColumnMeta], sample_rows: &[Vec<String>]) -> Vec<ColumnSummary> {
+pub fn compute_summaries(columns: &[ColumnMeta], data_rows: &[Vec<String>]) -> Vec<ColumnSummary> {
     use std::collections::HashMap;
 
     columns.iter().enumerate()
         .filter(|(_, col)| col.col_type != crate::classifier::ColumnType::Identifier)
         .map(|(i, col)| {
-            let values: Vec<&str> = sample_rows.iter()
+            let values: Vec<&str> = data_rows.iter()
                 .filter_map(|row| row.get(i).map(|s| s.as_str()))
                 .filter(|s| !s.is_empty())
                 .collect();
@@ -198,9 +204,9 @@ fn col_index(columns: &[ColumnMeta], name: &str) -> Option<usize> {
 }
 
 /// Helper: extract numeric values for a column from sample rows.
-fn numeric_values(columns: &[ColumnMeta], sample_rows: &[Vec<String>], col_name: &str) -> Vec<f64> {
+fn numeric_values(columns: &[ColumnMeta], data_rows: &[Vec<String>], col_name: &str) -> Vec<f64> {
     let idx = match col_index(columns, col_name) { Some(i) => i, None => return vec![] };
-    sample_rows.iter()
+    data_rows.iter()
         .filter_map(|row| row.get(idx)?.parse::<f64>().ok())
         .collect()
 }
@@ -208,7 +214,7 @@ fn numeric_values(columns: &[ColumnMeta], sample_rows: &[Vec<String>], col_name:
 /// Helper: aggregate numeric values by a group column.
 fn aggregate_by_group(
     columns: &[ColumnMeta],
-    sample_rows: &[Vec<String>],
+    data_rows: &[Vec<String>],
     metric: &str,
     group_by: &str,
     agg: &str,
@@ -217,7 +223,7 @@ fn aggregate_by_group(
     let group_idx = match col_index(columns, group_by) { Some(i) => i, None => return vec![] };
 
     let mut groups: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
-    for row in sample_rows {
+    for row in data_rows {
         let key = match row.get(group_idx) { Some(k) if !k.is_empty() => k.clone(), _ => continue };
         let val = match row.get(metric_idx).and_then(|v| v.parse::<f64>().ok()) { Some(v) => v, None => continue };
         groups.entry(key).or_default().push(val);
@@ -265,7 +271,7 @@ fn fmt_num(v: f64) -> String {
 pub fn realize_insight(
     kind: &str,
     params: &serde_json::Value,
-    sample_rows: &[Vec<String>],
+    data_rows: &[Vec<String>],
     columns: &[ColumnMeta],
 ) -> Option<String> {
     let get_str = |key: &str| params.get(key).and_then(|v| v.as_str());
@@ -276,7 +282,7 @@ pub fn realize_insight(
             let metric = get_str("metric")?;
             let group_by = get_str("group_by")?;
             let agg = get_str("aggregate").unwrap_or("Sum");
-            let groups = aggregate_by_group(columns, sample_rows, metric, group_by, agg);
+            let groups = aggregate_by_group(columns, data_rows, metric, group_by, agg);
             let (top_name, top_val) = groups.first()?;
             Some(format!("{} has the highest {} ({}) at {}", top_name, metric, agg.to_lowercase(), fmt_num(*top_val)))
         }
@@ -284,18 +290,26 @@ pub fn realize_insight(
             let metric = get_str("metric")?;
             let group_by = get_str("group_by")?;
             let agg = get_str("aggregate").unwrap_or("Sum");
-            let groups = aggregate_by_group(columns, sample_rows, metric, group_by, agg);
+            let groups = aggregate_by_group(columns, data_rows, metric, group_by, agg);
             if groups.len() < 2 { return None; }
             let (a_name, a_val) = &groups[0];
             let (b_name, b_val) = &groups[1];
             if *b_val == 0.0 { return None; }
             let pct = ((a_val - b_val) / b_val * 100.0).round();
-            Some(format!("{}'s {} ({}) is {}% higher than {}'s ({})",
-                a_name, metric, fmt_num(*a_val), pct, b_name, fmt_num(*b_val)))
+            let agg_word = match agg {
+                "Avg" => "average",
+                "Sum" => "total",
+                "Count" => "count of",
+                "Min" => "minimum",
+                "Max" => "maximum",
+                _ => "aggregate",
+            };
+            Some(format!("{}'s {} {} ({}) is {}% higher than {}'s ({})",
+                a_name, agg_word, metric, fmt_num(*a_val), pct, b_name, fmt_num(*b_val)))
         }
         "distribution" => {
             let metric = get_str("metric")?;
-            let vals = numeric_values(columns, sample_rows, metric);
+            let vals = numeric_values(columns, data_rows, metric);
             if vals.is_empty() { return None; }
             let min = vals.iter().cloned().fold(f64::INFINITY, f64::min);
             let max = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -307,7 +321,7 @@ pub fn realize_insight(
             let group_by = get_str("group_by")?;
             let agg = get_str("aggregate").unwrap_or("Sum");
             let n = get_usize("n").unwrap_or(3);
-            let groups = aggregate_by_group(columns, sample_rows, metric, group_by, agg);
+            let groups = aggregate_by_group(columns, data_rows, metric, group_by, agg);
             let total: f64 = groups.iter().map(|(_, v)| v).sum();
             if total == 0.0 { return None; }
             let top_n: f64 = groups.iter().take(n).map(|(_, v)| v).sum();
@@ -470,9 +484,7 @@ impl InsightEngine {
     pub fn generate(&mut self, context: &CsvContext) -> Result<AiInsightsResponse, String> {
         let prompt = build_prompt(context);
         let output = self.run_prompt(&prompt)?;
-        let mut response = parse_ai_response(&output, &context.columns)?;
-        realize_all_insights(&mut response, &context.sample_rows, &context.columns);
-        Ok(response)
+        parse_ai_response(&output, &context.columns, &context.data_rows)
     }
 
     pub fn generate_sql(&mut self, question: &str, columns: &[String], table_name: &str) -> Result<String, String> {
@@ -608,9 +620,9 @@ pub fn build_prompt(context: &CsvContext) -> String {
     prompt.push_str("Also include:\n");
     prompt.push_str("- suggested_title: a short, descriptive notebook title (3-6 words)\n");
     prompt.push_str("- suggested_summary: {title, metric, aggregate, denominator?} — a single aggregate over the ENTIRE dataset (not filtered). Title must accurately describe the computation. For simple: {title:\"Total DataValue\", metric:\"DataValue\", aggregate:\"Sum\"}. For ratios: {title:\"Value Per Record\", metric:\"DataValue\", aggregate:\"Sum\", denominator:\"orders\"}.\n\n");
-    prompt.push_str("Respond with ONLY valid JSON. Example:\n");
+    prompt.push_str("Respond with exactly ONE JSON object (not an array, not multiple alternatives). Example:\n");
     prompt.push_str(r#"{"suggested_title":"Product Revenue Analysis","suggested_summary":{"title":"Revenue Per Order","metric":"revenue","aggregate":"Sum","denominator":"orders"},"suggested_views":[{"view_type":"BoxPlot","title":"Revenue spread by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight_kind":"compare_two","insight_params":{"metric":"revenue","group_by":"product","aggregate":"Sum"}}],"insights":[{"kind":"concentration","params":{"metric":"revenue","group_by":"product","aggregate":"Sum","n":3}}]}"#);
-    prompt.push_str("\n\nONLY use column names from the dataset.\n");
+    prompt.push_str("\n\nColumn names are case-sensitive and must come verbatim from the list above. Do not substitute, rename, or invent (e.g. do not write \"region\" when the list has \"state\").\n");
     prompt.push_str("<end_of_turn>\n<start_of_turn>model\n");
 
     prompt
@@ -669,10 +681,13 @@ fn validate_ai_suggestion(s: &AiViewSuggestion, columns: &[ColumnMeta]) -> bool 
 }
 
 /// Parse the AI model's JSON response, filtering out invalid suggestions.
-pub fn parse_ai_response(raw: &str, columns: &[ColumnMeta]) -> Result<AiInsightsResponse, String> {
+pub fn parse_ai_response(
+    raw: &str,
+    columns: &[ColumnMeta],
+    data_rows: &[Vec<String>],
+) -> Result<AiInsightsResponse, String> {
     let json_str = extract_json(raw);
 
-    // Try parsing as RawAiResponse first (handles structured insights)
     let raw_response = serde_json::from_str::<RawAiResponse>(&json_str).map_err(|e| {
         format!(
             "Failed to parse AI response as JSON: {}. Raw output: {}",
@@ -681,15 +696,25 @@ pub fn parse_ai_response(raw: &str, columns: &[ColumnMeta]) -> Result<AiInsights
         )
     })?;
 
-    // Convert RawInsights to plain strings (structured ones get a placeholder that realize_all_insights fills)
-    let insights: Vec<String> = raw_response.insights.into_iter().filter_map(|i| {
+    // Plain strings are the legacy fallback (model ignored the structured
+    // format — trust what it gave). For structured insights, prefer kind+params
+    // (realized from data) over any bundled text (hallucination risk).
+    let mut insights: Vec<String> = Vec::new();
+    for i in raw_response.insights {
         match i {
-            RawInsight::Plain(s) => Some(s),
-            RawInsight::Structured(ai) => ai.text,
+            RawInsight::Plain(s) => insights.push(s),
+            RawInsight::Structured(ai) => {
+                if let (Some(kind), Some(params)) = (ai.kind, ai.params) {
+                    if let Some(realized) = realize_insight(&kind, &params, data_rows, columns) {
+                        insights.push(realized);
+                    }
+                } else if let Some(text) = ai.text {
+                    insights.push(text);
+                }
+            }
         }
-    }).collect();
+    }
 
-    // Validate suggested_summary references real columns
     let suggested_summary = raw_response.suggested_summary.filter(|s| {
         let metric_exists = columns.iter().any(|c| c.name == s.metric);
         let denom_exists = s.denominator.as_ref()
@@ -707,19 +732,16 @@ pub fn parse_ai_response(raw: &str, columns: &[ColumnMeta]) -> Result<AiInsights
 
     response.suggested_views.retain(|s| validate_ai_suggestion(s, columns));
 
-    Ok(response)
-}
-
-/// Replace structured insight_kind/insight_params with realized text on all views.
-fn realize_all_insights(response: &mut AiInsightsResponse, sample_rows: &[Vec<String>], columns: &[ColumnMeta]) {
+    // Realize view-level structured insights on the retained views.
     for view in &mut response.suggested_views {
         if let (Some(kind), Some(params)) = (&view.insight_kind, &view.insight_params) {
-            if let Some(realized) = realize_insight(kind, params, sample_rows, columns) {
+            if let Some(realized) = realize_insight(kind, params, data_rows, columns) {
                 view.insight = Some(realized);
             }
         }
-        // If no insight_kind but insight is present, keep the free text (fallback)
     }
+
+    Ok(response)
 }
 
 /// Extract JSON from model output, stripping markdown fences and prefix text.
@@ -727,10 +749,14 @@ fn realize_all_insights(response: &mut AiInsightsResponse, sample_rows: &[Vec<St
 fn extract_json(raw: &str) -> String {
     let trimmed = raw.trim();
 
-    // Find the first '{' — skip markdown fences, prefix text, etc.
-    let start = match trimmed.find('{') {
-        Some(i) => i,
-        None => return trimmed.to_string(),
+    // Find the first structural char ('{' or '[') — skip markdown fences, prefix text, etc.
+    let start_obj = trimmed.find('{');
+    let start_arr = trimmed.find('[');
+    let start = match (start_obj, start_arr) {
+        (Some(o), Some(a)) => o.min(a),
+        (Some(o), None) => o,
+        (None, Some(a)) => a,
+        (None, None) => return trimmed.to_string(),
     };
 
     let json_candidate = &trimmed[start..];
@@ -738,9 +764,16 @@ fn extract_json(raw: &str) -> String {
     // Use serde's streaming deserializer to parse exactly one JSON value
     let mut de = serde_json::Deserializer::from_str(json_candidate).into_iter::<serde_json::Value>();
     if let Some(Ok(val)) = de.next() {
+        // Some models emit an array of alternative responses; take the first element
+        // rather than failing to parse as RawAiResponse.
+        if let Some(arr) = val.as_array() {
+            if let Some(first) = arr.first() {
+                return first.to_string();
+            }
+        }
         val.to_string()
     } else {
-        // Fallback: return from first '{' to end (let caller handle the error)
+        // Fallback: return from first structural char to end (let caller handle the error)
         json_candidate.to_string()
     }
 }
@@ -799,7 +832,7 @@ pub async fn generate_ai_insights(
     let parsed = crate::commands::parse_csv(path.clone())?;
 
     // Read all rows for accurate insight computation (up to 50K)
-    let all_rows = read_all_rows(&path, 50_000)?;
+    let all_rows = read_all_rows(&path, MAX_INSIGHT_ROWS)?;
 
     let summaries = compute_summaries(&parsed.columns, &all_rows);
 
@@ -812,7 +845,7 @@ pub async fn generate_ai_insights(
         row_count: parsed.row_count,
         columns: parsed.columns.clone(),
         summaries,
-        sample_rows: all_rows,
+        data_rows: all_rows,
         current_views: parsed
             .suggestions
             .iter()
@@ -904,7 +937,7 @@ mod tests {
                     date_range: None,
                 },
             ],
-            sample_rows: vec![
+            data_rows: vec![
                 vec!["2024-01-01".into(), "1200.50".into(), "Widget".into()],
                 vec!["2024-01-02".into(), "3400.00".into(), "Gadget".into()],
                 vec!["2024-01-03".into(), "800.00".into(), "Widget".into()],
@@ -957,7 +990,7 @@ mod tests {
     #[test]
     fn test_parse_valid_json() {
         let json = r#"{"suggested_views":[{"view_type":"BarChart","title":"Revenue by product","metric":"revenue","group_by":"product","aggregate":"Sum","insight":"Products show uneven revenue distribution"}],"insights":["Widget generates 60% of revenue"]}"#;
-        let result = parse_ai_response(json, &test_columns());
+        let result = parse_ai_response(json, &test_columns(), &[]);
         assert!(result.is_ok());
         let resp = result.unwrap();
         assert_eq!(resp.suggested_views.len(), 1);
@@ -968,7 +1001,7 @@ mod tests {
     #[test]
     fn test_parse_json_with_markdown_fence() {
         let raw = "```json\n{\"suggested_views\":[],\"insights\":[\"test\"]}\n```";
-        let result = parse_ai_response(raw, &test_columns());
+        let result = parse_ai_response(raw, &test_columns(), &[]);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().insights, vec!["test"]);
     }
@@ -976,14 +1009,14 @@ mod tests {
     #[test]
     fn test_parse_malformed_json_fails() {
         let raw = "not json at all {{{";
-        let result = parse_ai_response(raw, &test_columns());
+        let result = parse_ai_response(raw, &test_columns(), &[]);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_parse_empty_response() {
         let json = r#"{"suggested_views":[],"insights":[]}"#;
-        let result = parse_ai_response(json, &test_columns());
+        let result = parse_ai_response(json, &test_columns(), &[]);
         assert!(result.is_ok());
         let resp = result.unwrap();
         assert!(resp.suggested_views.is_empty());
@@ -994,7 +1027,7 @@ mod tests {
     fn test_parse_accepts_scatter_with_metric_group_by() {
         // ScatterPlot with metric/group_by (AI fallback) should be accepted
         let json = r#"{"suggested_views":[{"view_type":"ScatterPlot","title":"test","metric":"revenue","group_by":"date"}],"insights":[]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert_eq!(result.suggested_views.len(), 1);
     }
 
@@ -1002,28 +1035,28 @@ mod tests {
     fn test_parse_filters_scatter_without_any_cols() {
         // ScatterPlot with no columns at all should be filtered out
         let json = r#"{"suggested_views":[{"view_type":"ScatterPlot","title":"test"}],"insights":[]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert!(result.suggested_views.is_empty());
     }
 
     #[test]
     fn test_parse_keeps_valid_scatter() {
         let json = r#"{"suggested_views":[{"view_type":"ScatterPlot","title":"test","x_col":"revenue","y_col":"date"}],"insights":[]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert_eq!(result.suggested_views.len(), 1);
     }
 
     #[test]
     fn test_parse_filters_nonexistent_column() {
         let json = r#"{"suggested_views":[{"view_type":"BarChart","title":"test","metric":"sales","group_by":"product","aggregate":"Sum"}],"insights":[]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert!(result.suggested_views.is_empty()); // "sales" not in columns
     }
 
     #[test]
     fn test_parse_keeps_valid_bar() {
         let json = r#"{"suggested_views":[{"view_type":"BarChart","title":"test","metric":"revenue","group_by":"product","aggregate":"Sum"}],"insights":[]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert_eq!(result.suggested_views.len(), 1);
     }
 
@@ -1031,7 +1064,7 @@ mod tests {
     fn test_parse_heatmap_with_metric_group_by_accepted() {
         // AI fallback: Heatmap using metric+group_by instead of x_col+y_col
         let json = r#"{"suggested_views":[{"view_type":"Heatmap","title":"test","metric":"revenue","group_by":"product"}],"insights":[]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert_eq!(result.suggested_views.len(), 1);
     }
 
@@ -1039,7 +1072,7 @@ mod tests {
     fn test_parse_choropleth_non_geographic_rejected() {
         // Choropleth with group_by column whose values don't match known geographies
         let json = r#"{"suggested_views":[{"view_type":"Choropleth","title":"test","metric":"revenue","group_by":"product","aggregate":"Sum"}],"insights":[]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert!(result.suggested_views.is_empty());
     }
 
@@ -1047,7 +1080,7 @@ mod tests {
     fn test_parse_missing_insights_key() {
         // Model omits "insights" key entirely — should still parse suggested_views
         let json = r#"{"suggested_views":[{"view_type":"BarChart","title":"test","metric":"revenue","group_by":"product","aggregate":"Sum"}]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert_eq!(result.suggested_views.len(), 1);
         assert!(result.insights.is_empty());
     }
@@ -1056,9 +1089,54 @@ mod tests {
     fn test_parse_missing_suggested_views_key() {
         // Model omits "suggested_views" key — insights should still come through
         let json = r#"{"insights":["Revenue is growing 10% month over month"]}"#;
-        let result = parse_ai_response(json, &test_columns()).unwrap();
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
         assert!(result.suggested_views.is_empty());
         assert_eq!(result.insights.len(), 1);
+    }
+
+    #[test]
+    fn test_structured_standalone_insight_realized_from_data() {
+        // Model emits a structured standalone insight with kind+params but no
+        // text. The realizer should compute the sentence from data_rows.
+        let json = r#"{"insights":[{"kind":"top_value","params":{"metric":"revenue","group_by":"product","aggregate":"Sum"}}]}"#;
+        let result = parse_ai_response(json, &test_col_metas(), &test_rows()).unwrap();
+        assert_eq!(result.insights.len(), 1);
+        // From test_rows(): Widget sums to 300, Gadget to 200, so Widget wins.
+        assert!(result.insights[0].contains("Widget"));
+        assert!(result.insights[0].contains("highest"));
+    }
+
+    #[test]
+    fn test_structured_standalone_insight_without_kind_is_dropped() {
+        // No kind/params and no text → nothing useful, drop silently.
+        let json = r#"{"insights":[{}]}"#;
+        let result = parse_ai_response(json, &test_col_metas(), &[]).unwrap();
+        assert!(result.insights.is_empty());
+    }
+
+    #[test]
+    fn test_extract_json_unwraps_array_of_alternatives() {
+        // Some models emit an array of alternative responses. Take the first.
+        let json = r#"[{"suggested_title":"First","insights":[]},{"suggested_title":"Second","insights":[]}]"#;
+        let result = parse_ai_response(json, &test_columns(), &[]).unwrap();
+        assert_eq!(result.suggested_title.as_deref(), Some("First"));
+    }
+
+    #[test]
+    fn test_compare_two_aggregate_word_mapping() {
+        // Rust-only test of realize_insight: each aggregate maps to the right word.
+        use serde_json::json;
+        let params_avg = json!({"metric":"revenue","group_by":"product","aggregate":"Avg"});
+        let r_avg = realize_insight("compare_two", &params_avg, &test_rows(), &test_col_metas()).unwrap();
+        assert!(r_avg.contains("average revenue"), "got: {}", r_avg);
+
+        let params_sum = json!({"metric":"revenue","group_by":"product","aggregate":"Sum"});
+        let r_sum = realize_insight("compare_two", &params_sum, &test_rows(), &test_col_metas()).unwrap();
+        assert!(r_sum.contains("total revenue"), "got: {}", r_sum);
+
+        let params_max = json!({"metric":"revenue","group_by":"product","aggregate":"Max"});
+        let r_max = realize_insight("compare_two", &params_max, &test_rows(), &test_col_metas()).unwrap();
+        assert!(r_max.contains("maximum revenue"), "got: {}", r_max);
     }
 
     #[test]
@@ -1127,7 +1205,7 @@ mod tests {
             ColumnMeta { name: "Subscription Date".into(), col_type: ColumnType::Temporal, unique_count: 878, total_count: 10000, sample_values: vec!["2020-08-26".into()] },
             ColumnMeta { name: "Website".into(), col_type: ColumnType::Identifier, unique_count: 4517, total_count: 10000, sample_values: vec!["http://example.com".into()] },
         ];
-        let sample_rows: Vec<Vec<String>> = (0..5).map(|i| {
+        let data_rows: Vec<Vec<String>> = (0..5).map(|i| {
             vec![
                 i.to_string(), format!("ID{}", i), "Alice".into(), "Smith".into(),
                 "Acme".into(), "Portland".into(), "Norway".into(),
@@ -1135,13 +1213,13 @@ mod tests {
                 "2020-01-01".into(), "http://example.com".into(),
             ]
         }).collect();
-        let summaries = compute_summaries(&columns, &sample_rows);
+        let summaries = compute_summaries(&columns, &data_rows);
         let ctx = CsvContext {
             filename: "customers-10000.csv".into(),
             row_count: 10000,
             columns,
             summaries,
-            sample_rows,
+            data_rows,
             current_views: vec![],
         };
         let prompt = build_prompt(&ctx);
@@ -1151,8 +1229,9 @@ mod tests {
         assert!(!prompt.contains("Phone 1"), "Identifiers should be filtered from prompt");
         assert!(prompt.contains("Country"), "Geographic columns should be in prompt");
         assert!(prompt.contains("Subscription Date"), "Temporal columns should be in prompt");
-        // Rough size check: prompt should be under 3000 chars (~750 tokens)
-        assert!(prompt.len() < 3200, "Prompt too long: {} chars", prompt.len());
+        // Rough size check: prompt should stay under ~3500 chars (~875 tokens).
+        // Raised from 3200 after prompt grew with stricter single-object + column-name rules.
+        assert!(prompt.len() < 3500, "Prompt too long: {} chars", prompt.len());
     }
 
     // --- realize_insight tests ---

@@ -5,6 +5,23 @@ import { ViewSuggestion } from "../types";
 import SummaryCard from "./SummaryCard";
 import ChartView from "./ChartView";
 
+/**
+ * Merge a new chart view-type onto an existing viewConfig, preserving
+ * insight metadata that describes the underlying data (metric + group_by)
+ * rather than the specific visualization. Exported for unit testing.
+ */
+export function mergeViewTypeSwap(
+  current: ViewSuggestion,
+  next: ViewSuggestion,
+): ViewSuggestion {
+  return {
+    ...next,
+    insight: current.insight,
+    insight_edited: current.insight_edited,
+    suggested_by: current.suggested_by,
+  };
+}
+
 export default function DataviewNodeView({
   node,
   updateAttributes,
@@ -36,7 +53,7 @@ export default function DataviewNodeView({
   const insertable = suggestions.filter((s) => !s.shown_by_default);
 
   const handleSwap = (alt: ViewSuggestion) => {
-    updateAttributes({ viewConfig: alt });
+    updateAttributes({ viewConfig: mergeViewTypeSwap(viewConfig, alt) });
   };
 
   const handleChangeAggregate = (agg: ViewSuggestion["aggregate"]) => {

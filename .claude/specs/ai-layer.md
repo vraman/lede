@@ -85,7 +85,7 @@ pub struct CsvContext {
     pub filename: String,
     pub row_count: usize,
     pub columns: Vec<ColumnMeta>,       // name + type from classifier
-    pub sample_rows: Vec<Vec<String>>,  // first 10 rows
+    pub data_rows: Vec<Vec<String>>,    // up to MAX_INSIGHT_ROWS (50k), for stats + realization
     pub current_views: Vec<String>,     // titles of Phase 1 views already shown
 }
 ```
