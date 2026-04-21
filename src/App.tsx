@@ -125,6 +125,11 @@ function App() {
   const [aiEnabled, setAiEnabled] = useState(isAiEnabled());
   const aiCancelledRef = useRef(false);
   const [allSuggestions, setAllSuggestions] = useState<ViewSuggestion[]>([]);
+  // Mirror of allSuggestions readable from async handlers without stale closures.
+  const allSuggestionsRef = useRef<ViewSuggestion[]>([]);
+  useEffect(() => {
+    allSuggestionsRef.current = allSuggestions;
+  }, [allSuggestions]);
   const [duckDbReady, setDuckDbReady] = useState(false);
 
   const handleFilePick = useCallback(async () => {
@@ -263,6 +268,16 @@ function App() {
             }
           }
         });
+        // Also seed from Phase 1 alternatives that aren't shown by default but
+        // are reachable through the switcher chips. Without this, AI-suggested
+        // duplicates of those alternatives slip through and surface as repeated
+        // chips (e.g. "Bar | Map | Map" for revenue × state).
+        // Use the ref instead of `allSuggestions` directly — this function runs
+        // inside an async flow that often outlives the render where it was
+        // created, so the state closure is stale.
+        for (const s of allSuggestionsRef.current) {
+          existingKeys.add(`${s.metric || ""}|${s.group_by || ""}|${s.view_type}`);
+        }
 
         const novelNodes: JSONContent[] = [];
         const newAlternatives: ViewSuggestion[] = [];

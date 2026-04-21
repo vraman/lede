@@ -31,5 +31,8 @@ CLAUDE.local.md
 # Personal local shell scripts (e.g. init.local.sh)
 *.local.sh
 
+# Personal local notes (e.g. FOLLOWUPS.local.md)
+*.local.md
+
 # Agent progress logs and other scratch notes
 *.txt
